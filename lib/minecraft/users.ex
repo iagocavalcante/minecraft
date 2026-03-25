@@ -60,6 +60,11 @@ defmodule Minecraft.Users do
     GenServer.cast(__MODULE__, {:join, uuid, username})
   end
 
+  @spec leave(binary) :: :ok
+  def leave(uuid) do
+    GenServer.cast(__MODULE__, {:leave, uuid})
+  end
+
   #
   # Callbacks
   #
@@ -87,6 +92,11 @@ defmodule Minecraft.Users do
   def handle_cast({:update_position, uuid, position}, state) do
     users = Map.update!(state.users, uuid, fn user -> %User{user | position: position} end)
     {:noreply, %{state | users: users}}
+  end
+
+  def handle_cast({:leave, uuid}, %State{} = state) do
+    logged_in = MapSet.delete(state.logged_in, uuid)
+    {:noreply, %State{state | logged_in: logged_in}}
   end
 
   def handle_cast({:join, uuid, username}, state) do

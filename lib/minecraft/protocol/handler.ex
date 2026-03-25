@@ -28,8 +28,8 @@ defmodule Minecraft.Protocol.Handler do
   end
 
   def handle(%Client.Status.Request{}, conn) do
-    {:ok, json} =
-      Poison.encode(%{
+    json =
+      Jason.encode!(%{
         version: %{name: "1.12.2", protocol: 340},
         players: %{max: 20, online: 0, sample: []},
         description: %{text: "Elixir Minecraft"}
@@ -102,8 +102,20 @@ defmodule Minecraft.Protocol.Handler do
     {:ok, :noreply, conn}
   end
 
-  def handle(%Client.Play.TeleportConfirm{}, conn) do
-    # TODO: Verify this matches the one sent to the client
+  def handle(%Client.Play.TeleportConfirm{teleport_id: id}, conn) do
+    case conn.assigns[:teleport_id] do
+      ^id -> {:ok, :noreply, conn}
+      _ -> {:error, :invalid_teleport_id, conn}
+    end
+  end
+
+  def handle(%Client.Play.ChatMessage{message: message}, conn) do
+    username = conn.assigns[:username] || "Unknown"
+    json = Jason.encode!(%{text: "<#{username}> #{message}"})
+    {:ok, %Server.Play.ChatMessage{json_data: json, position: 0}, conn}
+  end
+
+  def handle(%Client.Play.Player{}, conn) do
     {:ok, :noreply, conn}
   end
 
@@ -132,8 +144,11 @@ defmodule Minecraft.Protocol.Handler do
     {:ok, :noreply, conn}
   end
 
-  def handle(%Client.Play.KeepAlive{}, conn) do
-    # TODO: Should kick client if we don't get one of these for 30 seconds
+  def handle(%Client.Play.KeepAlive{keep_alive_id: id}, conn) do
+    if conn.state_machine do
+      send(conn.state_machine, {:keepalive_ack, id})
+    end
+
     {:ok, :noreply, conn}
   end
 

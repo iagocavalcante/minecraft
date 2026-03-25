@@ -8,7 +8,10 @@ defmodule Minecraft.Application do
       Minecraft.Crypto,
       Minecraft.World,
       Minecraft.Users,
-      Minecraft.Server
+      Minecraft.Server,
+      # Bedrock Edition (UDP)
+      Minecraft.Bedrock.SessionSupervisor,
+      Minecraft.Bedrock.Listener
     ]
 
     opts = [strategy: :one_for_one, name: Minecraft.Supervisor]

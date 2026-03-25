@@ -10,6 +10,8 @@ defmodule Minecraft.StateMachine do
   alias Minecraft.Protocol
   @behaviour :gen_statem
 
+  @keepalive_timeout_ms 30_000
+
   @doc """
   Starts the state machine.
   """
@@ -25,20 +27,20 @@ defmodule Minecraft.StateMachine do
 
   @impl true
   def init(protocol) do
-    {:ok, :join, protocol, [{:next_event, :internal, nil}]}
+    data = %{protocol: protocol, last_keepalive_ack: System.system_time(:millisecond)}
+    {:ok, :join, data, [{:next_event, :internal, nil}]}
   end
 
   @impl true
   def terminate(_reason, _state, _data) do
-    # We don't need to log errors here, since whatever killed this will log an error
     :ignored
   end
 
   @doc """
   State entered when a client logs in and begins joining the server.
   """
-  @spec join(:internal, any, pid) :: {:keep_state, pid}
-  def join(:internal, _, protocol) do
+  def join(:internal, _, data) do
+    protocol = data.protocol
     conn = Protocol.get_conn(protocol)
     :ok = Minecraft.Users.join(conn.assigns[:uuid], conn.assigns[:username])
 
@@ -48,25 +50,40 @@ defmodule Minecraft.StateMachine do
     :ok = Protocol.send_packet(protocol, %Server.Play.SpawnPosition{position: {0, 200, 0}})
 
     :ok =
+      Protocol.send_packet(protocol, %Server.Play.TimeUpdate{world_age: 0, time_of_day: 6000})
+
+    :ok =
       Protocol.send_packet(protocol, %Server.Play.PlayerAbilities{
         creative_mode: true,
         allow_flying: true,
         flying_speed: 0.1
       })
 
+    teleport_id = :rand.uniform(127)
+
     :ok =
       Protocol.send_packet(protocol, %Server.Play.PlayerPositionAndLook{
-        teleport_id: :rand.uniform(127)
+        teleport_id: teleport_id
       })
 
-    {:next_state, :spawn, protocol, [{:next_event, :internal, nil}]}
+    Protocol.set_teleport_id(protocol, teleport_id)
+
+    :ok =
+      Protocol.send_packet(protocol, %Server.Play.WindowItems{
+        window_id: 0,
+        slots: List.duplicate(nil, 46)
+      })
+
+    {:next_state, :spawn, data, [{:next_event, :internal, nil}]}
   end
 
-  def join(:enter, _, protocol) do
-    {:keep_state, protocol}
+  def join(:enter, _, data) do
+    {:keep_state, data}
   end
 
-  def spawn(:internal, _, protocol) do
+  def spawn(:internal, _, data) do
+    protocol = data.protocol
+
     for r <- 0..32 do
       for x <- -r..r do
         for z <- -r..r do
@@ -84,23 +101,31 @@ defmodule Minecraft.StateMachine do
       end
     end
 
-    {:next_state, :ready, protocol, [{:state_timeout, 1000, :keepalive}]}
+    {:next_state, :ready, data, [{:state_timeout, 1000, :keepalive}]}
   end
 
-  def spawn(:enter, _, protocol) do
-    {:keep_state, protocol}
+  def spawn(:enter, _, data) do
+    {:keep_state, data}
   end
 
-  def ready(:enter, _, protocol) do
-    {:keep_state, protocol}
+  def ready(:enter, _, data) do
+    {:keep_state, data}
   end
 
-  def ready(:state_timeout, :keepalive, protocol) do
-    :ok =
-      Protocol.send_packet(protocol, %Server.Play.KeepAlive{
-        keep_alive_id: System.system_time(:millisecond)
-      })
+  def ready(:state_timeout, :keepalive, data) do
+    now = System.system_time(:millisecond)
 
-    {:keep_state, protocol, [{:state_timeout, 1000, :keepalive}]}
+    if now - data.last_keepalive_ack > @keepalive_timeout_ms do
+      {:stop, :normal, data}
+    else
+      :ok =
+        Protocol.send_packet(data.protocol, %Server.Play.KeepAlive{keep_alive_id: now})
+
+      {:keep_state, data, [{:state_timeout, 1_000, :keepalive}]}
+    end
+  end
+
+  def ready(:info, {:keepalive_ack, _id}, data) do
+    {:keep_state, %{data | last_keepalive_ack: System.system_time(:millisecond)}}
   end
 end

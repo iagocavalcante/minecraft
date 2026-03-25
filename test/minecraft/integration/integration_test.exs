@@ -24,7 +24,7 @@ defmodule Minecraft.HandshakeTest do
     assert {:ok, %Server.Status.Response{} = response} =
              TestClient.send(client, %Client.Status.Request{})
 
-    assert Poison.decode!(response.json) == %{
+    assert Jason.decode!(response.json) == %{
              "version" => %{"name" => "1.12.2", "protocol" => 340},
              "players" => %{"max" => 20, "online" => 0, "sample" => []},
              "description" => %{"text" => "Elixir Minecraft"}
@@ -67,9 +67,11 @@ defmodule Minecraft.HandshakeTest do
 
       assert {:ok, %Server.Play.JoinGame{}} = TestClient.receive(client)
       assert {:ok, %Server.Play.SpawnPosition{}} = TestClient.receive(client)
+      assert {:ok, %Server.Play.TimeUpdate{}} = TestClient.receive(client)
       assert {:ok, %Server.Play.PlayerAbilities{}} = TestClient.receive(client)
 
       assert {:ok, %Server.Play.PlayerPositionAndLook{} = ppal} = TestClient.receive(client)
+      assert {:ok, %Server.Play.WindowItems{}} = TestClient.receive(client)
 
       assert :ok =
                TestClient.cast(client, %Client.Play.TeleportConfirm{teleport_id: ppal.teleport_id})
@@ -117,6 +119,9 @@ defmodule Minecraft.HandshakeTest do
       verify_token: Minecraft.Crypto.encrypt(<<1, 2, 3, 4>>)
     }
 
-    assert {:error, :closed} = TestClient.send(client, encryption_response)
+    assert {:ok, %Server.Login.Disconnect{reason: reason}} =
+             TestClient.send(client, encryption_response)
+
+    assert Jason.decode!(reason)["text"] =~ "bad_verify_token"
   end
 end
