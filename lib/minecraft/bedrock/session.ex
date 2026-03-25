@@ -242,8 +242,7 @@ defmodule Minecraft.Bedrock.Session do
       )
 
     state = send_game_packet(state, start_game)
-    state = send_game_packet(state, Packet.encode_play_status(:player_spawn))
-
+    # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end
 
@@ -261,10 +260,14 @@ defmodule Minecraft.Bedrock.Session do
         end)
       end)
 
-    send_game_packet(
-      state,
-      Packet.encode_network_chunk_publisher_update(0, 64, 0, actual_radius * 16)
-    )
+    state =
+      send_game_packet(
+        state,
+        Packet.encode_network_chunk_publisher_update(0, 64, 0, actual_radius * 16)
+      )
+
+    # Send PlayStatus(PlayerSpawn) AFTER chunks (matches gophertunnel order)
+    send_game_packet(state, Packet.encode_play_status(:player_spawn))
   end
 
   defp handle_player_initialised(state) do

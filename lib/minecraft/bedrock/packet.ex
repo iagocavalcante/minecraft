@@ -78,21 +78,21 @@ defmodule Minecraft.Bedrock.Packet do
     wrap(@resource_packs_info, body)
   end
 
-  @doc "ResourcePackStack — no packs (protocol 924)"
+  @doc "ResourcePackStack — no packs (protocol 924, matches gophertunnel)"
   def encode_resource_pack_stack do
     body =
       IO.iodata_to_binary([
         # TexturePackRequired (bool)
         <<0::8>>,
-        # BehaviourPacks (array with varuint length)
+        # TexturePacks (Slice — varuint32 length = 0)
         encode_varint_unsigned(0),
-        # TexturePacks (array with varuint length)
-        encode_varint_unsigned(0),
-        # GameVersion (string)
+        # BaseGameVersion (string)
         encode_string("*"),
-        # Experiments (li32 count + experiments)
+        # Experiments (SliceUint32Length — uint32 LE length = 0)
         <<0::32-little>>,
         # ExperimentsPreviouslyToggled (bool)
+        <<0::8>>,
+        # IncludeEditorPacks (bool)
         <<0::8>>
       ])
 
@@ -134,8 +134,7 @@ defmodule Minecraft.Bedrock.Packet do
   end
 
   @doc """
-  StartGame — the big one. Sends minimum required fields.
-  This is a simplified version with most fields at default values.
+  StartGame — matches gophertunnel Marshal order for protocol 924.
   """
   def encode_start_game(opts \\ []) do
     entity_id = Keyword.get(opts, :entity_id, 1)
@@ -147,57 +146,171 @@ defmodule Minecraft.Bedrock.Packet do
 
     body =
       IO.iodata_to_binary([
-        # EntityUniqueID (varint64 zigzag)
+        # EntityUniqueID
         encode_varint_signed64(entity_id),
-        # EntityRuntimeID (varuint64)
+        # EntityRuntimeID
         encode_varint_unsigned64(runtime_id),
-        # PlayerGameMode (varint32 signed)
+        # PlayerGameMode
         encode_varint_signed(game_mode),
-        # PlayerPosition (3x float32 LE)
+        # PlayerPosition
         <<px::32-little-float, py::32-little-float, pz::32-little-float>>,
-        # Rotation (2x float32 LE — yaw, pitch)
+        # Pitch, Yaw
         <<0.0::32-little-float, 0.0::32-little-float>>,
-        # Level settings
-        encode_level_settings(spx, spy, spz, game_mode, world_name),
+        # WorldSeed (int64)
+        <<0::64-little>>,
+        # SpawnBiomeType (int16)
+        <<0::16-little>>,
+        # UserDefinedBiomeName
+        encode_string(""),
+        # Dimension (overworld)
+        encode_varint_signed(0),
+        # Generator (flat)
+        encode_varint_signed(2),
+        # WorldGameMode
+        encode_varint_signed(game_mode),
+        # Hardcore
+        <<0::8>>,
+        # Difficulty (easy)
+        encode_varint_signed(1),
+        # WorldSpawn.X (UBlockPos)
+        encode_varint_signed(spx),
+        # WorldSpawn.Y
+        encode_varint_unsigned(spy),
+        # WorldSpawn.Z
+        encode_varint_signed(spz),
+        # AchievementsDisabled (false!)
+        <<0::8>>,
+        # EditorWorldType
+        encode_varint_signed(0),
+        # CreatedInEditor
+        <<0::8>>,
+        # ExportedFromEditor
+        <<0::8>>,
+        # DayCycleLockTime
+        encode_varint_signed(0),
+        # EducationEditionOffer
+        encode_varint_signed(0),
+        # EducationFeaturesEnabled
+        <<0::8>>,
+        # EducationProductID
+        encode_string(""),
+        # RainLevel
+        <<0.0::32-little-float>>,
+        # LightningLevel
+        <<0.0::32-little-float>>,
+        # ConfirmedPlatformLockedContent
+        <<0::8>>,
+        # MultiPlayerGame
+        <<1::8>>,
+        # LANBroadcastEnabled
+        <<1::8>>,
+        # XBLBroadcastMode
+        encode_varint_signed(4),
+        # PlatformBroadcastMode
+        encode_varint_signed(4),
+        # CommandsEnabled
+        <<1::8>>,
+        # TexturePackRequired
+        <<0::8>>,
+        # GameRules (FuncSlice, 0 rules)
+        encode_varint_unsigned(0),
+        # Experiments (SliceUint32Length, 0)
+        <<0::32-little>>,
+        # ExperimentsPreviouslyToggled
+        <<0::8>>,
+        # BonusChestEnabled
+        <<0::8>>,
+        # StartWithMapEnabled
+        <<0::8>>,
+        # PlayerPermissions (member)
+        encode_varint_signed(1),
+        # ServerChunkTickRadius (int32)
+        <<4::32-little-signed>>,
+        # HasLockedBehaviourPack
+        <<0::8>>,
+        # HasLockedTexturePack
+        <<0::8>>,
+        # FromLockedWorldTemplate
+        <<0::8>>,
+        # MSAGamerTagsOnly
+        <<0::8>>,
+        # FromWorldTemplate
+        <<0::8>>,
+        # WorldTemplateSettingsLocked
+        <<0::8>>,
+        # OnlySpawnV1Villagers
+        <<0::8>>,
+        # PersonaDisabled
+        <<0::8>>,
+        # CustomSkinsDisabled
+        <<0::8>>,
+        # EmoteChatMuted
+        <<0::8>>,
+        # BaseGameVersion
+        encode_string("*"),
+        # LimitedWorldWidth
+        <<0::32-little>>,
+        # LimitedWorldDepth
+        <<0::32-little>>,
+        # NewNether
+        <<1::8>>,
+        # EducationSharedResourceURI (buttonName + linkURI)
+        encode_string(""),
+        encode_string(""),
+        # ForceExperimentalGameplay
+        <<0::8>>,
+        # ChatRestrictionLevel (uint8)
+        <<0::8>>,
+        # DisablePlayerInteractions
+        <<0::8>>,
         # LevelID
         encode_string(""),
         # WorldName
         encode_string(world_name),
-        # PremiumWorldTemplateID
+        # TemplateContentIdentity
         encode_string(""),
-        # IsTrial
+        # Trial
         <<0::8>>,
-        # PlayerMovementSettings
+        # PlayerMovementSettings (only 2 fields in protocol 924)
+        # RewindHistorySize
         encode_varint_signed(0),
-        encode_varint_unsigned(0),
-        encode_varint_unsigned(0),
+        # ServerAuthoritativeBlockBreaking
         <<0::8>>,
-        # CurrentTick
+        # Time (int64)
         <<0::64-little>>,
         # EnchantmentSeed
         encode_varint_signed(0),
-        # BlockPalette (empty)
+        # Blocks (Slice, empty)
         encode_varint_unsigned(0),
-        # ItemTable (empty)
-        encode_varint_unsigned(0),
-        # MultiplayerCorrelationID
+        # MultiPlayerCorrelationID
         encode_string(""),
         # ServerAuthoritativeInventory
         <<0::8>>,
-        # GameEngine
-        encode_string(""),
-        # PropertyData (empty NBT compound — TAG_End)
-        <<0x0A, 0x00, 0x00, 0x00>>,
-        # BlockPaletteChecksum
+        # GameVersion
+        encode_string("1.26.0"),
+        # PropertyData — empty NBT compound (NetworkLittleEndian)
+        # TAG_Compound(0x0A) + varint name_len(0) + TAG_End(0x00)
+        <<0x0A, 0x00, 0x00>>,
+        # ServerBlockStateChecksum (uint64)
         <<0::64-little>>,
-        # WorldTemplateID (UUID)
+        # WorldTemplateID (UUID, 16 bytes)
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
         # UseBlockNetworkIDHashes
         <<1::8>>,
-        # ServerControlledSounds
-        <<0::8>>
+        # ServerAuthoritativeSound
+        <<0::8>>,
+        # ServerJoinInformation (OptionalMarshaler — write false/0 to skip)
+        <<0::8>>,
+        # ServerID
+        encode_string(""),
+        # ScenarioID
+        encode_string(""),
+        # WorldID
+        encode_string(""),
+        # OwnerID
+        encode_string("")
       ])
 
     wrap(@start_game, body)
