@@ -151,6 +151,10 @@ defmodule Minecraft.Bedrock.Session do
             {:login, %{player_name: name}} ->
               handle_login(name, st)
 
+            {:client_cache_status, _} ->
+              Logger.debug("Bedrock: ClientCacheStatus — sending ResourcePacksInfo")
+              send_game_packet(st, Packet.encode_resource_packs_info())
+
             {:resource_pack_client_response, %{status: :have_all_packs}} ->
               handle_resource_pack_response_have_all(st)
 
@@ -212,15 +216,16 @@ defmodule Minecraft.Bedrock.Session do
     Logger.info("Bedrock: Login from '#{player_name}'")
 
     state = %{state | player_name: player_name}
+    # Send PlayStatus first, then ResourcePacksInfo
+    # They must be separate batches for the client to process correctly
     state = send_game_packet(state, Packet.encode_play_status(:login_success))
-    state = send_game_packet(state, Packet.encode_resource_packs_info())
-
-    %{state | bedrock_state: :resource_packs}
+    %{state | bedrock_state: :awaiting_cache_status}
   end
 
   defp handle_resource_pack_response_have_all(state) do
-    Logger.info("Bedrock: Client has all packs")
-    send_game_packet(state, Packet.encode_resource_pack_stack())
+    Logger.info("Bedrock: Client has all packs — sending ResourcePackStack")
+    state = send_game_packet(state, Packet.encode_resource_pack_stack())
+    %{state | bedrock_state: :resource_packs}
   end
 
   defp handle_resource_pack_completed(state) do

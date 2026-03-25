@@ -15,11 +15,11 @@ defmodule Minecraft.Bedrock.Codec do
   def encode_batch(packets) do
     inner = encode_sub_packets(packets)
     z = :zlib.open()
-    :ok = :zlib.deflateInit(z)
+    # Raw DEFLATE: negative window bits (-15) = no zlib header
+    :ok = :zlib.deflateInit(z, :default, :deflated, -15, 8, :default)
     compressed = :zlib.deflate(z, inner, :finish) |> IO.iodata_to_binary()
     :zlib.deflateEnd(z)
     :zlib.close(z)
-    # 0xFE + algo byte (0x00 = deflate) + compressed
     <<0xFE, 0x00, compressed::binary>>
   end
 

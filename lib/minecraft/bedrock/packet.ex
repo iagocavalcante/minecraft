@@ -55,34 +55,46 @@ defmodule Minecraft.Bedrock.Packet do
     wrap(@play_status, <<code::32>>)
   end
 
-  @doc "ResourcePacksInfo — no packs"
+  @doc "ResourcePacksInfo — no packs (protocol 924)"
   def encode_resource_packs_info do
-    body = <<
-      0::8,
-      0::8,
-      0::8,
-      0::16-little,
-      0::16-little,
-      0::8
-    >>
+    body =
+      IO.iodata_to_binary([
+        # must_accept (bool)
+        <<0::8>>,
+        # has_addons (bool)
+        <<0::8>>,
+        # has_scripts (bool)
+        <<0::8>>,
+        # disable_vibrant_visuals (bool) — added in newer protocols
+        <<0::8>>,
+        # world_template UUID (16 bytes zeros)
+        <<0::128>>,
+        # world_template version (empty string, varint length 0)
+        <<0>>,
+        # texture_packs count (li16 = 0)
+        <<0::16-little>>
+      ])
 
     wrap(@resource_packs_info, body)
   end
 
-  @doc "ResourcePackStack — no packs, base game version '*'"
+  @doc "ResourcePackStack — no packs (protocol 924)"
   def encode_resource_pack_stack do
-    game_version = "*"
-    gv_len = byte_size(game_version)
-
-    body = <<
-      0::8,
-      0::unsigned-little-32,
-      0::unsigned-little-32,
-      gv_len::unsigned-little-16,
-      game_version::binary,
-      0::32-little,
-      0::8
-    >>
+    body =
+      IO.iodata_to_binary([
+        # TexturePackRequired (bool)
+        <<0::8>>,
+        # BehaviourPacks (array with varuint length)
+        encode_varint_unsigned(0),
+        # TexturePacks (array with varuint length)
+        encode_varint_unsigned(0),
+        # GameVersion (string)
+        encode_string("*"),
+        # Experiments (li32 count + experiments)
+        <<0::32-little>>,
+        # ExperimentsPreviouslyToggled (bool)
+        <<0::8>>
+      ])
 
     wrap(@resource_pack_stack, body)
   end
@@ -244,6 +256,11 @@ defmodule Minecraft.Bedrock.Packet do
 
   defp decode_by_id(@set_local_player_as_initialised, _rest) do
     {:set_local_player_as_initialised, %{}}
+  end
+
+  # ClientCacheStatus (0x81 = 129) — client tells us if it supports blob cache
+  defp decode_by_id(0x81, <<supported::8, _rest::binary>>) do
+    {:client_cache_status, %{supported: supported != 0}}
   end
 
   defp decode_by_id(id, _rest) do
