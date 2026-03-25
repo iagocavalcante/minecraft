@@ -1,13 +1,10 @@
 # Minecraft
 
-[![Build Status](https://travis-ci.com/thecodeboss/minecraft.svg?branch=master)](https://travis-ci.com/thecodeboss/minecraft)
-[![Inline docs](http://inch-ci.org/github/thecodeboss/minecraft.svg)](http://inch-ci.org/github/thecodeboss/minecraft)
-[![Coverage Status](https://coveralls.io/repos/github/thecodeboss/minecraft/badge.svg?branch=master)](https://coveralls.io/github/thecodeboss/minecraft?branch=master)
-[![Hex.pm version](https://img.shields.io/hexpm/v/minecraft.svg?style=flat-square)](https://hex.pm/packages/minecraft)
-[![Hex.pm downloads](https://img.shields.io/hexpm/dt/minecraft.svg?style=flat-square)](https://hex.pm/packages/minecraft)
-[![License](https://img.shields.io/hexpm/l/minecraft.svg?style=flat-square)](https://hex.pm/packages/minecraft)
+A Minecraft server implementation in Elixir supporting both **Java Edition** (1.12.2, Protocol 340) and **Bedrock Edition** (1.26.0, Protocol 924).
 
-A Minecraft server implementation in Elixir. Until this reaches version 1.0, please do not consider it ready for running real Minecraft servers (unless you're adventurous).
+> **Fork of [thecodeboss/minecraft](https://github.com/thecodeboss/minecraft)** — original by Michael Oliver. This fork adds Bedrock Edition support, upgrades dependencies to modern Elixir/OTP, and deploys to Fly.io.
+
+Until this reaches version 1.0, please do not consider it ready for running real Minecraft servers (unless you're adventurous).
 
 You can view [the documentation on Hex](https://hexdocs.pm/minecraft/).
 
@@ -24,8 +21,8 @@ The following list of to-do items should be enough to be able to play on the ser
 ### General
 
 - [x] World Generation
-- [ ] World in-memory storage
-- [ ] World persistence on disk
+- [x] World in-memory storage
+- [x] World persistence on disk (basic — Erlang term storage)
 - [ ] Core server logic (this is a catch-all)
 
 ### Handshake Packets
@@ -46,21 +43,26 @@ The following list of to-do items should be enough to be able to play on the ser
 - [x] Client: Encryption Response
 - [ ] _(optional)_ Server: Set Compression
 - [x] Server: Login Success
-- [ ] Server: Disconnect
+- [x] Server: Disconnect
 
 ### Play Packets
 
 - [x] Server: Join Game
 - [x] Server: Spawn Position
+- [x] Server: Time Update
 - [x] Server: Player Abilities
 - [x] Client: Plugin Message
 - [x] Client: Client Settings
 - [x] Server: Player Position and Look
-- [x] Client: Teleport Confirm
+- [x] Client: Teleport Confirm (with ID validation)
 - [x] Client: Player Position and Look
 - [x] Client: Client Status
-- [ ] Server: Window Items
+- [x] Server: Window Items
 - [x] Server: Chunk Data
-- [ ] Client: Player
+- [x] Client: Player
 - [x] Client: Player Position
 - [x] Client: Player Look
+- [x] Client: Chat Message
+- [x] Server: Chat Message
+- [x] Server: Keep Alive (with 30s timeout kick)
+- [x] Client: Keep Alive
