@@ -257,7 +257,6 @@ defmodule Minecraft.Bedrock.Session do
         Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
           chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
           st3 = send_game_packet(st2, Packet.encode_level_chunk(x, z, 4, chunk_data))
-          # Small delay to avoid flooding UDP
           Process.sleep(10)
           st3
         end)

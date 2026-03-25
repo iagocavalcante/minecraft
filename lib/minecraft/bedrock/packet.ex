@@ -285,7 +285,7 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::64-little>>,
         # EnchantmentSeed
         encode_varint_signed(0),
-        # Blocks (Slice, empty)
+        # Blocks (Slice, empty — client uses its own vanilla palette)
         encode_varint_unsigned(0),
         # MultiPlayerCorrelationID
         encode_string(""),
@@ -302,7 +302,7 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
-        # UseBlockNetworkIDHashes (false = use vanilla runtime IDs)
+        # UseBlockNetworkIDHashes (false = use runtime IDs from Blocks palette)
         <<0::8>>,
         # ServerAuthoritativeSound
         <<0::8>>,
@@ -388,6 +388,34 @@ defmodule Minecraft.Bedrock.Packet do
   # =====================
   # PRIVATE HELPERS
   # =====================
+
+  # Block palette for StartGame — defines runtime ID to block name mapping
+  # Each entry: string(name) + NBT(properties as NetworkLittleEndian compound)
+  # Runtime ID = index in this list
+  defp encode_block_palette do
+    blocks = [
+      "minecraft:air",
+      "minecraft:stone",
+      "minecraft:dirt",
+      "minecraft:grass_block",
+      "minecraft:bedrock"
+    ]
+
+    entries =
+      Enum.map(blocks, fn name ->
+        IO.iodata_to_binary([
+          encode_string(name),
+          # Empty NBT compound (NetworkLittleEndian): TAG_Compound + varint name_len(0) + TAG_End
+          <<0x0A, 0x00, 0x00>>
+        ])
+      end)
+      |> IO.iodata_to_binary()
+
+    IO.iodata_to_binary([
+      encode_varint_unsigned(length(blocks)),
+      entries
+    ])
+  end
 
   defp wrap(packet_id, body) do
     # Bedrock uses raw varuint packet ID (no << 2 shift in practice)
