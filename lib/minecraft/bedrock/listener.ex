@@ -114,6 +114,6 @@ defmodule Minecraft.Bedrock.Listener do
   end
 
   defp build_motd(server_guid) do
-    "MCPE;Elixir Minecraft;924;1.26.0;0;20;#{server_guid};Bedrock Level;Survival;1;19132;19133"
+    "MCPE;Elixir Minecraft;944;1.26.10;0;20;#{server_guid};Bedrock Level;Survival;1;19132;19133"
   end
 end

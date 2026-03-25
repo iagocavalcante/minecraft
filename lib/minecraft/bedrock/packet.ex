@@ -302,7 +302,7 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
-        # UseBlockNetworkIDHashes (false = use runtime IDs from Blocks palette)
+        # UseBlockNetworkIDHashes
         <<0::8>>,
         # ServerAuthoritativeSound
         <<0::8>>,
@@ -388,6 +388,11 @@ defmodule Minecraft.Bedrock.Packet do
   # =====================
   # PRIVATE HELPERS
   # =====================
+
+  @doc "ItemRegistry (ID 148) — empty item list, sent after StartGame"
+  def encode_item_registry do
+    wrap(148, encode_varint_unsigned(0))
+  end
 
   # Block palette for StartGame — defines runtime ID to block name mapping
   # Each entry: string(name) + NBT(properties as NetworkLittleEndian compound)

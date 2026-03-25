@@ -242,6 +242,7 @@ defmodule Minecraft.Bedrock.Session do
       )
 
     state = send_game_packet(state, start_game)
+    # TODO: Send ItemRegistry with full vanilla item list (empty list crashes mobile)
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end
