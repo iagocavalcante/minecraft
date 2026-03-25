@@ -248,7 +248,7 @@ defmodule Minecraft.Bedrock.Session do
 
   defp handle_request_chunk_radius(radius, state) do
     Logger.info("Bedrock: RequestChunkRadius #{radius}")
-    actual_radius = min(radius, 4)
+    actual_radius = min(radius, 2)
 
     state = send_game_packet(state, Packet.encode_chunk_radius_updated(actual_radius))
 
@@ -256,7 +256,10 @@ defmodule Minecraft.Bedrock.Session do
       Enum.reduce(-actual_radius..actual_radius, state, fn x, st ->
         Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
           chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
-          send_game_packet(st2, Packet.encode_level_chunk(x, z, 4, chunk_data))
+          st3 = send_game_packet(st2, Packet.encode_level_chunk(x, z, 4, chunk_data))
+          # Small delay to avoid flooding UDP
+          Process.sleep(10)
+          st3
         end)
       end)
 

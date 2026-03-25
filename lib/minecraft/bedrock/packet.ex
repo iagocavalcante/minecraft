@@ -117,18 +117,23 @@ defmodule Minecraft.Bedrock.Packet do
     wrap(@network_chunk_publisher_update, body)
   end
 
-  @doc "LevelChunk — send chunk data to client"
-  def encode_level_chunk(x, z, sub_chunk_count, chunk_data, biome_data \\ <<>>) do
-    body = <<
-      encode_varint_signed(x)::binary,
-      encode_varint_signed(z)::binary,
-      encode_varint_unsigned(sub_chunk_count)::binary,
-      0::8,
-      0::8,
-      encode_varint_unsigned(byte_size(chunk_data) + byte_size(biome_data))::binary,
-      chunk_data::binary,
-      biome_data::binary
-    >>
+  @doc "LevelChunk — send chunk data to client (protocol 924)"
+  def encode_level_chunk(x, z, sub_chunk_count, raw_payload) do
+    body =
+      IO.iodata_to_binary([
+        # ChunkPos (2x varint32 zigzag)
+        encode_varint_signed(x),
+        encode_varint_signed(z),
+        # Dimension (varint32)
+        encode_varint_signed(0),
+        # SubChunkCount (varuint32)
+        encode_varint_unsigned(sub_chunk_count),
+        # CacheEnabled (bool)
+        <<0::8>>,
+        # RawPayload (ByteSlice — varuint32 length + data)
+        encode_varint_unsigned(byte_size(raw_payload)),
+        raw_payload
+      ])
 
     wrap(@level_chunk, body)
   end
@@ -297,8 +302,8 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
-        # UseBlockNetworkIDHashes
-        <<1::8>>,
+        # UseBlockNetworkIDHashes (false = use vanilla runtime IDs)
+        <<0::8>>,
         # ServerAuthoritativeSound
         <<0::8>>,
         # ServerJoinInformation (OptionalMarshaler — write false/0 to skip)
