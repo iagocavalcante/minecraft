@@ -1,0 +1,31 @@
+app = "minecraft-devsnorte"
+primary_region = "gru"
+
+[build]
+
+[env]
+  LANG = "en_US.UTF-8"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[services]]
+  internal_port = 25565
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 25565
+
+[[services]]
+  internal_port = 19132
+  protocol = "udp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 19132
