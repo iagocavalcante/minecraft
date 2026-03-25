@@ -6,13 +6,14 @@ defmodule Minecraft.Protocol do
   use GenServer
   require Logger
   alias Minecraft.Connection
+  alias Minecraft.Packet.Server
   alias Minecraft.Protocol.Handler
 
   @behaviour :ranch_protocol
 
-  @impl true
-  def start_link(ref, socket, transport, protocol_opts) do
-    pid = :proc_lib.spawn_link(__MODULE__, :init, [{ref, socket, transport, protocol_opts}])
+  @impl :ranch_protocol
+  def start_link(ref, transport, protocol_opts) do
+    pid = :proc_lib.spawn_link(__MODULE__, :init, [{ref, transport, protocol_opts}])
     {:ok, pid}
   end
 
@@ -28,13 +29,17 @@ defmodule Minecraft.Protocol do
     GenServer.call(pid, :get_conn)
   end
 
+  def set_teleport_id(pid, teleport_id) do
+    GenServer.cast(pid, {:set_teleport_id, teleport_id})
+  end
+
   #
   # Server Callbacks
   #
 
-  @impl true
-  def init({ref, socket, transport, _protocol_opts}) do
-    :ok = :ranch.accept_ack(ref)
+  @impl GenServer
+  def init({ref, transport, _protocol_opts}) do
+    {:ok, socket} = :ranch.handshake(ref)
     conn = Connection.init(self(), socket, transport)
     :gen_server.enter_loop(__MODULE__, [], conn)
   end
@@ -49,6 +54,11 @@ defmodule Minecraft.Protocol do
 
   def handle_info({:tcp_closed, socket}, conn) do
     Logger.info(fn -> "Client #{conn.client_ip} disconnected." end)
+
+    if uuid = conn.assigns[:uuid] do
+      Minecraft.Users.leave(uuid)
+    end
+
     :ok = conn.transport.close(socket)
     {:stop, :normal, conn}
   end
@@ -61,6 +71,11 @@ defmodule Minecraft.Protocol do
 
   def handle_call(:get_conn, _from, conn) do
     {:reply, conn, conn}
+  end
+
+  @impl true
+  def handle_cast({:set_teleport_id, teleport_id}, conn) do
+    {:noreply, Connection.assign(conn, :teleport_id, teleport_id)}
   end
 
   #
@@ -97,9 +112,18 @@ defmodule Minecraft.Protocol do
         |> Connection.send_packet(response)
         |> handle_conn()
 
-      {:error, _, conn} = err ->
+      {:error, reason, conn} = err ->
         Logger.error(fn -> "#{__MODULE__} error: #{inspect(err)}" end)
-        conn = Connection.close(conn)
+
+        conn =
+          if conn.current_state == :login do
+            reason_json = Jason.encode!(%{text: "Login failed: #{reason}"})
+            Connection.send_packet(conn, %Server.Login.Disconnect{reason: reason_json})
+          else
+            conn
+          end
+
+        Connection.close(conn)
         {:stop, :normal, conn}
     end
   end

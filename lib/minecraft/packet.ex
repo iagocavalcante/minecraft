@@ -2,7 +2,7 @@ defmodule Minecraft.Packet do
   @moduledoc """
   Base serialization and deserialization routines for packets.
   """
-  use Bitwise
+  import Bitwise
   alias Minecraft.Packet.Client
   alias Minecraft.Packet.Server
 
@@ -12,7 +12,6 @@ defmodule Minecraft.Packet do
 
   @type packet_types ::
           Client.Handshake.t()
-          | Client.Handshake.t()
           | Client.Status.Request.t()
           | Client.Status.Ping.t()
           | Server.Status.Response.t()
@@ -21,9 +20,12 @@ defmodule Minecraft.Packet do
           | Client.Login.EncryptionResponse.t()
           | Server.Login.EncryptionRequest.t()
           | Server.Login.LoginSuccess.t()
+          | Server.Login.Disconnect.t()
           | Client.Play.TeleportConfirm.t()
+          | Client.Play.Player.t()
           | Client.Play.ClientStatus.t()
           | Client.Play.ClientSettings.t()
+          | Client.Play.ChatMessage.t()
           | Client.Play.PluginMessage.t()
           | Client.Play.KeepAlive.t()
           | Client.Play.PlayerPosition.t()
@@ -34,6 +36,9 @@ defmodule Minecraft.Packet do
           | Server.Play.PlayerAbilities.t()
           | Server.Play.PlayerPositionAndLook.t()
           | Server.Play.KeepAlive.t()
+          | Server.Play.ChatMessage.t()
+          | Server.Play.WindowItems.t()
+          | Server.Play.TimeUpdate.t()
 
   @doc """
   Given a raw binary packet, deserializes it into a `Packet` struct.
@@ -82,8 +87,8 @@ defmodule Minecraft.Packet do
         Client.Login.EncryptionResponse.deserialize(data)
 
       # Server Login Packets
-      # TODO {:login, 0, :server} ->
-      # Server.Login.Disconnect.deserialize(data)
+      {:login, 0, :server} ->
+        Server.Login.Disconnect.deserialize(data)
 
       {:login, 1, :server} ->
         Server.Login.EncryptionRequest.deserialize(data)
@@ -94,6 +99,9 @@ defmodule Minecraft.Packet do
       # Client Play Packets
       {:play, 0, :client} ->
         Client.Play.TeleportConfirm.deserialize(data)
+
+      {:play, 0x02, :client} ->
+        Client.Play.ChatMessage.deserialize(data)
 
       {:play, 3, :client} ->
         Client.Play.ClientStatus.deserialize(data)
@@ -107,6 +115,9 @@ defmodule Minecraft.Packet do
       {:play, 0x0B, :client} ->
         Client.Play.KeepAlive.deserialize(data)
 
+      {:play, 0x0C, :client} ->
+        Client.Play.Player.deserialize(data)
+
       {:play, 0x0D, :client} ->
         Client.Play.PlayerPosition.deserialize(data)
 
@@ -117,6 +128,12 @@ defmodule Minecraft.Packet do
         Client.Play.PlayerLook.deserialize(data)
 
       # Server Play Packets
+      {:play, 0x0F, :server} ->
+        Server.Play.ChatMessage.deserialize(data)
+
+      {:play, 0x14, :server} ->
+        Server.Play.WindowItems.deserialize(data)
+
       {:play, 0x1F, :server} ->
         Server.Play.KeepAlive.deserialize(data)
 
@@ -131,6 +148,9 @@ defmodule Minecraft.Packet do
 
       {:play, 0x2F, :server} ->
         Server.Play.PlayerPositionAndLook.deserialize(data)
+
+      {:play, 0x47, :server} ->
+        Server.Play.TimeUpdate.deserialize(data)
 
       _ ->
         {:error, :invalid_packet}

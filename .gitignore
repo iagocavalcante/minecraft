@@ -30,3 +30,10 @@ minecraft-*.tar
 
 # Compiled NIFs
 *.so
+
+# Claude Code
+.claude/
+.claude-memory/
+
+# Docker
+.dockerignore

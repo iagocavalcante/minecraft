@@ -1,4 +1,4 @@
-#include <byteswap.h>
+#include "compat.h"
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>

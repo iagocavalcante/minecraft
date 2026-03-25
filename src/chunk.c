@@ -1,5 +1,5 @@
 #include "chunk.h"
-#include <byteswap.h>
+#include "compat.h"
 #include <string.h>
 
 static uint8_t rand1[64] = {3, 2, 1, 2, 2, 2, 1, 1, 2, 3, 2, 2, 3, 2, 2, 1,

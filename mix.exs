@@ -8,10 +8,11 @@ defmodule Minecraft.MixProject do
     [
       app: :minecraft,
       version: "0.1.0",
-      elixir: "~> 1.6",
+      elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       compilers: Mix.compilers() ++ [:nifs],
       start_permanent: Mix.env() == :prod,
+      releases: releases(),
       deps: deps(),
 
       # URLs
@@ -31,8 +32,13 @@ defmodule Minecraft.MixProject do
       ],
 
       # Coverage
-      test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
+      test_coverage: [tool: ExCoveralls]
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,
@@ -49,19 +55,27 @@ defmodule Minecraft.MixProject do
     ]
   end
 
+  defp releases do
+    [
+      minecraft: [
+        include_executables_for: [:unix],
+        steps: [:assemble]
+      ]
+    ]
+  end
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:excoveralls, "~> 0.8", only: :test},
-      {:ex_doc, "~> 0.16", only: :dev, runtime: false},
-      {:httpoison, "~> 1.2"},
-      {:inch_ex, only: :docs},
-      {:mock, "~> 0.3.0", only: :test},
+      {:excoveralls, "~> 0.18", only: :test},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:httpoison, "~> 2.0"},
+      {:mock, "~> 0.3.8", only: :test},
       {:ranch, "~> 2.1"},
-      {:poison, "~> 5.0"}
+      {:jason, "~> 1.4"}
     ]
   end
 

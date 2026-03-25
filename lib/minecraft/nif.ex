@@ -7,7 +7,8 @@ defmodule Minecraft.NIF do
   @doc false
   @spec load_nifs() :: :ok | {:error, any}
   def load_nifs() do
-    :ok = :erlang.load_nif('./priv/nifs', 0)
+    path = :filename.join(:code.priv_dir(:minecraft), ~c"nifs")
+    :ok = :erlang.load_nif(path, 0)
   end
 
   @doc """

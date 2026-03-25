@@ -30,7 +30,12 @@ defmodule Minecraft.Server do
   def start_link(opts \\ []) do
     max_connections = Keyword.get(opts, :max_connections, 100)
     port = Keyword.get(opts, :port, 25565)
-    ranch_opts = [port: port, max_connections: max_connections]
-    :ranch.start_listener(:minecraft_server, :ranch_tcp, ranch_opts, Minecraft.Protocol, [])
+
+    transport_opts = %{
+      socket_opts: [port: port],
+      max_connections: max_connections
+    }
+
+    :ranch.start_listener(:minecraft_server, :ranch_tcp, transport_opts, Minecraft.Protocol, [])
   end
 end

@@ -16,7 +16,7 @@ defmodule Minecraft.Crypto.AES do
   end
 
   defp decrypt(<<head::1-binary, rest::binary>>, %__MODULE__{} = state, decrypted) do
-    plain_text = :crypto.block_decrypt(:aes_cfb8, state.key, state.ivec, head)
+    plain_text = :crypto.crypto_one_time(:aes_128_cfb8, state.key, state.ivec, head, false)
     ivec = next_ivec(state.ivec, head)
     decrypt(rest, %__MODULE__{state | ivec: ivec}, [decrypted | plain_text])
   end
@@ -34,7 +34,7 @@ defmodule Minecraft.Crypto.AES do
   end
 
   defp encrypt(<<head::1-binary, rest::binary>>, %__MODULE__{} = state, encrypted) do
-    cipher_text = :crypto.block_encrypt(:aes_cfb8, state.key, state.ivec, head)
+    cipher_text = :crypto.crypto_one_time(:aes_128_cfb8, state.key, state.ivec, head, true)
     ivec = next_ivec(state.ivec, cipher_text)
     encrypt(rest, %__MODULE__{state | ivec: ivec}, [encrypted | cipher_text])
   end
