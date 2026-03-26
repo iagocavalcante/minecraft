@@ -302,7 +302,7 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
-        # UseBlockNetworkIDHashes
+        # UseBlockNetworkIDHashes (false — sequential runtime IDs from vanilla palette)
         <<0::8>>,
         # ServerAuthoritativeSound
         <<0::8>>,

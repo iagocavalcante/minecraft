@@ -1,39 +1,37 @@
 defmodule Minecraft.Bedrock.Chunk do
   @moduledoc """
-  Generates chunks for Bedrock Edition protocol 924.
-  SubChunk version 8. Uses FNV1 block state hashes (UseBlockNetworkIDHashes=true).
-  Hashes computed from block name + sorted state properties.
+  Generates chunks for Bedrock Edition.
+  SubChunk version 8. UseBlockNetworkIDHashes=false.
   """
   import Bitwise
 
-  # FNV1-32 hashes of block states (signed int32)
-  # These are version-independent — the client maps them to its own block states
-  # Runtime IDs from canonical_block_states.nbt (pmmp master/latest)
-  @air 12531
-  @stone 2533
-  @dirt 9853
-  @grass_block 11063
-  @bedrock 13080
+  # Vanilla runtime IDs from canonical_block_states.nbt
+  # Trying dragonfly's latest embedded values
+  @air 12_530
+  @stone 2_532
+  @dirt 9_852
+  @grass_block 11_062
+  @bedrock 13_079
 
   @doc """
-  Generate a flat world chunk.
+  Generate a flat world chunk: bedrock, stone, dirt, grass.
+  4 subchunks + 24 biome storages + border byte.
   """
   def flat_chunk do
-    # Test boundary: 50, 63, 64, 127
-    sub0 = single_block_subchunk(50)
-    sub1 = single_block_subchunk(63)
-    sub2 = single_block_subchunk(64)
-    sub3 = single_block_subchunk(127)
+    sub0 = single_block_subchunk(@bedrock)
+    sub1 = single_block_subchunk(@stone)
+    sub2 = single_block_subchunk(@dirt)
+    sub3 = single_block_subchunk(@grass_block)
 
     biomes = for _ <- 0..23, do: single_palette_storage(1)
 
     IO.iodata_to_binary([sub0, sub1, sub2, sub3, biomes, <<0>>])
   end
 
-  defp single_block_subchunk(block_hash) do
+  defp single_block_subchunk(runtime_id) do
     IO.iodata_to_binary([
       <<8, 1>>,
-      single_palette_storage(block_hash)
+      single_palette_storage(runtime_id)
     ])
   end
 
