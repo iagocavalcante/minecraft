@@ -145,7 +145,8 @@ defmodule Minecraft.Bedrock.Session do
       {:ok, packets} ->
         Enum.reduce(packets, state, fn pkt, st ->
           case Packet.decode(pkt) do
-            {:request_network_settings, %{protocol_version: _ver}} ->
+            {:request_network_settings, %{protocol_version: ver}} ->
+              Logger.info("Bedrock: Client protocol version: #{ver}")
               handle_request_network_settings(st)
 
             {:login, %{player_name: name}} ->
@@ -253,10 +254,17 @@ defmodule Minecraft.Bedrock.Session do
 
     state = send_game_packet(state, Packet.encode_chunk_radius_updated(actual_radius))
 
+    chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
+
+    File.write!(
+      "/tmp/mc_debug.log",
+      "chunk_size=#{byte_size(chunk_data)}\nchunk_hex=#{Base.encode16(chunk_data)}\n",
+      [:write]
+    )
+
     state =
       Enum.reduce(-actual_radius..actual_radius, state, fn x, st ->
         Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
-          chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
           st3 = send_game_packet(st2, Packet.encode_level_chunk(x, z, 4, chunk_data))
           Process.sleep(10)
           st3
