@@ -72,7 +72,7 @@ defmodule Minecraft.MixProject do
     [
       {:excoveralls, "~> 0.18", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:httpoison, "~> 2.0"},
+      {:httpoison, "~> 3.0"},
       {:mock, "~> 0.3.8", only: :test},
       {:ranch, "~> 2.1"},
       {:jason, "~> 1.4"}
