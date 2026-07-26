@@ -264,6 +264,22 @@ defmodule Minecraft.Bedrock.Session do
     handle_place_block(tx.block_position, tx.face, tx.held_block_runtime_id, state)
   end
 
+  defp handle_game_packet({:interact, %{action: :open_inventory}}, state) do
+    Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
+    # Window 0 = player inventory, container type 0xFF (-1) = own inventory;
+    # the entity unique ID matches StartGame's entity_id.
+    send_game_packet(state, Packet.encode_container_open(0, 0xFF, {0, 0, 0}, 1))
+  end
+
+  defp handle_game_packet({:interact, _other}, state) do
+    state
+  end
+
+  defp handle_game_packet({:container_close, %{window_id: w, container_type: t}}, state) do
+    # The client expects its close report to be acked.
+    send_game_packet(state, Packet.encode_container_close(w, t, false))
+  end
+
   defp handle_game_packet(other, state) do
     Logger.debug("Bedrock: unhandled game packet: #{inspect(other)}")
     state
@@ -342,6 +358,12 @@ defmodule Minecraft.Bedrock.Session do
     # vanilla table is required for the client's item/inventory UI.
     state = send_game_packet(state, Packet.encode_item_registry(Minecraft.Bedrock.Items.all()))
     state = send_game_packet(state, encode_creative_inventory())
+
+    # Initial (empty) player inventory windows: main inventory, offhand,
+    # armour. The client won't open its inventory UI without them.
+    state = send_game_packet(state, Packet.encode_inventory_content(0, 36))
+    state = send_game_packet(state, Packet.encode_inventory_content(119, 1))
+    state = send_game_packet(state, Packet.encode_inventory_content(120, 4))
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end

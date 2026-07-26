@@ -15,6 +15,10 @@ defmodule Minecraft.Bedrock.Packet do
   @start_game 0x0B
   @update_block 0x15
   @inventory_transaction 0x1E
+  @interact 0x21
+  @container_open 0x2E
+  @container_close 0x2F
+  @inventory_content 0x31
   @request_chunk_radius 0x45
   @chunk_radius_updated 0x46
   @level_chunk 0x3A
@@ -499,6 +503,24 @@ defmodule Minecraft.Bedrock.Packet do
     {:client_cache_status, %{supported: supported != 0}}
   end
 
+  # Interact — action 6 (OpenInventory) is the client asking to open its own
+  # inventory; the server must answer with ContainerOpen.
+  defp decode_by_id(@interact, <<action::8, rest::binary>>) do
+    {_target_runtime_id, _rest} = Codec.decode_varuint(rest)
+
+    action_atom =
+      case action do
+        6 -> :open_inventory
+        other -> {:other, other}
+      end
+
+    {:interact, %{action: action_atom}}
+  end
+
+  defp decode_by_id(@container_close, <<window_id::8, container_type::8, _server::8>>) do
+    {:container_close, %{window_id: window_id, container_type: container_type}}
+  end
+
   defp decode_by_id(id, _rest) do
     {:unknown_bedrock_packet, id}
   end
@@ -509,6 +531,58 @@ defmodule Minecraft.Bedrock.Packet do
 
   @item_registry 162
   @creative_content 145
+
+  # An empty ItemInstance (ItemInstanceNew wire format): int16 network ID 0,
+  # uint16 count 0, varuint metadata 0, no stack-net-ID, varuint block runtime
+  # ID 0, empty extra-data byte slice.
+  @empty_item_instance <<0, 0, 0, 0, 0, 0, 0, 0>>
+
+  @doc """
+  InventoryContent (ID 49) — a full (empty) inventory window snapshot. The
+  client refuses to open its inventory UI until it has received the initial
+  content for the player windows.
+  """
+  def encode_inventory_content(window_id, slot_count) do
+    body =
+      IO.iodata_to_binary([
+        encode_varint_unsigned(window_id),
+        encode_varint_unsigned(slot_count),
+        List.duplicate(@empty_item_instance, slot_count),
+        # FullContainerName: container ID 0, dynamic container ID absent
+        <<0, 0>>,
+        # StorageItem (only meaningful for dynamic containers)
+        @empty_item_instance
+      ])
+
+    wrap(@inventory_content, body)
+  end
+
+  @doc """
+  ContainerOpen (ID 46) — server's answer to Interact(OpenInventory); without
+  it the inventory button does nothing. Container type 0xFF (-1) is the
+  player's own inventory.
+  """
+  def encode_container_open(window_id, container_type, {x, y, z}, entity_unique_id) do
+    body =
+      IO.iodata_to_binary([
+        <<window_id::8, container_type::8>>,
+        encode_varint_signed(x),
+        encode_varint_signed(y),
+        encode_varint_signed(z),
+        encode_varint_signed64(entity_unique_id)
+      ])
+
+    wrap(@container_open, body)
+  end
+
+  @doc """
+  ContainerClose (ID 47) — echoed back when the client reports closing a
+  window (the client expects the ack; `server_side?` is false for that case).
+  """
+  def encode_container_close(window_id, container_type, server_side?) do
+    server = if server_side?, do: 1, else: 0
+    wrap(@container_close, <<window_id::8, container_type::8, server::8>>)
+  end
 
   # Empty NBT compound, NetworkLittleEndian: TAG_Compound + empty name + TAG_End.
   @empty_nbt <<0x0A, 0x00, 0x00>>
