@@ -31,7 +31,10 @@ defmodule Minecraft.Bedrock.Session do
     bedrock_state: :connecting,
     compression_enabled: false,
     position: nil,
-    rotation: nil
+    rotation: nil,
+    chunk_radius: nil,
+    center_chunk: nil,
+    sent_chunks: MapSet.new()
   ]
 
   # Java 1.12 global block types (id <<< 4 ||| meta).
@@ -222,6 +225,7 @@ defmodule Minecraft.Bedrock.Session do
     # ~20/s — track the latest position/rotation, then apply any block
     # actions and item interactions this tick carried.
     state = %{state | position: position, rotation: {input.pitch, input.yaw, input.head_yaw}}
+    state = maybe_stream_chunks(state)
 
     state =
       Enum.reduce(Map.get(input, :block_actions, []), state, fn
@@ -349,23 +353,56 @@ defmodule Minecraft.Bedrock.Session do
     spawn_chunk = Minecraft.World.get_chunk(0, 0)
     surface = Minecraft.Bedrock.Chunk.surface_y(spawn_chunk, 0, 0)
 
-    state =
-      Enum.reduce(-actual_radius..actual_radius, state, fn x, st ->
-        Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
-          chunk = Minecraft.World.get_chunk(x, z)
-          {sub_chunks, chunk_data} = Minecraft.Bedrock.Chunk.encode(chunk)
-          send_game_packet(st2, Packet.encode_level_chunk(x, z, sub_chunks, chunk_data))
-        end)
-      end)
+    state = %{state | chunk_radius: actual_radius, center_chunk: {0, 0}}
+    state = stream_chunks_around(state, {0, 0}, {0, surface + 1, 0})
+
+    # Send PlayStatus(PlayerSpawn) AFTER chunks (matches gophertunnel order)
+    send_game_packet(state, Packet.encode_play_status(:player_spawn))
+  end
+
+  # Sends the NetworkChunkPublisherUpdate for the new view center followed by
+  # every in-radius chunk not yet sent to this client. The publisher update
+  # goes first so the client doesn't discard chunks as out-of-view.
+  defp stream_chunks_around(state, {center_x, center_z} = center, {px, py, pz}) do
+    radius = state.chunk_radius
 
     state =
       send_game_packet(
         state,
-        Packet.encode_network_chunk_publisher_update(0, surface + 1, 0, actual_radius * 16)
+        Packet.encode_network_chunk_publisher_update(px, py, pz, radius * 16)
       )
 
-    # Send PlayStatus(PlayerSpawn) AFTER chunks (matches gophertunnel order)
-    send_game_packet(state, Packet.encode_play_status(:player_spawn))
+    wanted =
+      for x <- (center_x - radius)..(center_x + radius),
+          z <- (center_z - radius)..(center_z + radius),
+          not MapSet.member?(state.sent_chunks, {x, z}),
+          do: {x, z}
+
+    state =
+      Enum.reduce(wanted, state, fn {x, z}, st ->
+        chunk = Minecraft.World.get_chunk(x, z)
+        {sub_chunks, chunk_data} = Minecraft.Bedrock.Chunk.encode(chunk)
+        send_game_packet(st, Packet.encode_level_chunk(x, z, sub_chunks, chunk_data))
+      end)
+
+    %{
+      state
+      | center_chunk: center,
+        sent_chunks: MapSet.union(state.sent_chunks, MapSet.new(wanted))
+    }
+  end
+
+  # Streams new chunks when the player crosses into a different chunk.
+  defp maybe_stream_chunks(%__MODULE__{chunk_radius: nil} = state), do: state
+
+  defp maybe_stream_chunks(%__MODULE__{position: {px, py, pz}} = state) do
+    center = {floor(px / 16), floor(pz / 16)}
+
+    if center == state.center_chunk do
+      state
+    else
+      stream_chunks_around(state, center, {trunc(px), trunc(py), trunc(pz)})
+    end
   end
 
   defp handle_player_initialised(state) do
