@@ -23,7 +23,9 @@ defmodule Minecraft.World do
   """
   @spec get_chunk(integer, integer) :: Minecraft.Chunk.t()
   def get_chunk(x, z) do
-    GenServer.call(__MODULE__, {:get_chunk, x, z})
+    # :infinity — on-demand chunk generation can exceed the default 5s timeout
+    # when many chunks are requested back-to-back during join.
+    GenServer.call(__MODULE__, {:get_chunk, x, z}, :infinity)
   end
 
   #

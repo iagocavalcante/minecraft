@@ -81,10 +81,22 @@ defmodule Minecraft.StateMachine do
     {:keep_state, data}
   end
 
+  # Cap how many chunks we stream on join. The world pre-generates a radius-20
+  # spawn area; sending a radius-32 disc (~3,300 chunks) synchronously used to
+  # risk call timeouts and flood the client regardless of its view distance.
+  @default_view_distance 10
+  @max_view_distance 16
+
   def spawn(:internal, _, data) do
     protocol = data.protocol
+    conn = Protocol.get_conn(protocol)
 
-    for r <- 0..32 do
+    radius =
+      (conn.settings[:view_distance] || @default_view_distance)
+      |> min(@max_view_distance)
+      |> max(2)
+
+    for r <- 0..radius do
       for x <- -r..r do
         for z <- -r..r do
           if (x * x + z * z <= r * r and x * x + z * z > (r - 1) * (r - 1)) or r == 0 do

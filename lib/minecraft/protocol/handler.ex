@@ -60,27 +60,32 @@ defmodule Minecraft.Protocol.Handler do
   end
 
   def handle(%Client.Login.EncryptionResponse{} = packet, conn) do
-    verify_token = Crypto.decrypt(packet.verify_token)
+    expected_token = conn.assigns[:verify_token]
 
-    case conn.assigns[:verify_token] do
-      ^verify_token ->
-        shared_secret = Crypto.decrypt(packet.shared_secret)
+    with {:ok, ^expected_token} <- Crypto.decrypt(packet.verify_token),
+         {:ok, shared_secret} <- Crypto.decrypt(packet.shared_secret),
+         %Connection{} = conn <-
+           conn |> Connection.encrypt(shared_secret) |> Connection.verify_login() do
+      conn =
+        conn
+        |> Connection.put_state(:play)
+        |> Connection.join()
 
-        conn =
-          conn
-          |> Connection.encrypt(shared_secret)
-          |> Connection.verify_login()
-          |> Connection.put_state(:play)
-          |> Connection.join()
+      response = %Server.Login.LoginSuccess{
+        uuid: conn.assigns[:uuid],
+        username: conn.assigns[:username]
+      }
 
-        response = %Server.Login.LoginSuccess{
-          uuid: conn.assigns[:uuid],
-          username: conn.assigns[:username]
-        }
+      {:ok, response, conn}
+    else
+      {:error, :decrypt_failed} ->
+        {:error, :bad_encryption_response, conn}
 
-        {:ok, response, conn}
+      {:error, :failed_login_verification} ->
+        {:error, :failed_login_verification, conn}
 
-      _ ->
+      # Decryption succeeded but the token didn't match what we sent.
+      {:ok, _mismatched_token} ->
         {:error, :bad_verify_token, conn}
     end
   end

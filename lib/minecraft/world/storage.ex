@@ -17,7 +17,7 @@ defmodule Minecraft.World.Storage do
     path = chunk_path(world_dir, x, z)
 
     case File.read(path) do
-      {:ok, binary} -> {:ok, :erlang.binary_to_term(binary)}
+      {:ok, binary} -> {:ok, :erlang.binary_to_term(binary, [:safe])}
       {:error, _} -> :error
     end
   end

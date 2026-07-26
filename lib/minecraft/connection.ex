@@ -142,14 +142,24 @@ defmodule Minecraft.Connection do
     query_params = URI.encode_query(%{username: username, serverId: hash})
     url = @has_joined_url <> query_params
 
-    with %{body: body, status_code: 200} <- HTTPoison.get!(url),
-         %{"id" => uuid, "name" => ^username} <- Jason.decode!(body) do
-      assign(conn, :uuid, normalize_uuid(uuid))
-    else
-      _ ->
-        {:error, :failed_login_verification}
+    # HTTPoison.get!/Jason.decode! raise on network errors, timeouts, or invalid
+    # JSON; a failed verification must disconnect the client, not crash us.
+    try do
+      with %{body: body, status_code: 200} <- HTTPoison.get!(url),
+           %{"id" => uuid, "name" => ^username} <- Jason.decode!(body) do
+        assign(conn, :uuid, normalize_uuid(uuid))
+      else
+        _ ->
+          {:error, :failed_login_verification}
+      end
+    rescue
+      _ -> {:error, :failed_login_verification}
     end
   end
+
+  # Upper bound on buffered-but-unparsed bytes. A well-behaved client never
+  # buffers more than one max-size packet; anything larger is abuse.
+  @max_buffer_size 2_097_167
 
   @doc """
   Stores data received from the client in this `Connection`.
@@ -157,7 +167,13 @@ defmodule Minecraft.Connection do
   @spec put_data(t, binary) :: t
   def put_data(conn, data) do
     {data, conn} = maybe_decrypt(data, conn)
-    %__MODULE__{conn | data: conn.data <> data}
+    buffer = conn.data <> data
+
+    if byte_size(buffer) > @max_buffer_size do
+      put_error(conn, :packet_too_large)
+    else
+      %__MODULE__{conn | data: buffer}
+    end
   end
 
   @doc """
@@ -202,20 +218,29 @@ defmodule Minecraft.Connection do
 
   @doc """
   Pops a packet from the `Connection`.
-  """
-  @spec read_packet(t) :: {:ok, struct, t} | {:error, t}
-  def read_packet(conn) do
-    case Packet.deserialize(conn.data, conn.current_state) do
-      {packet, rest} when is_binary(rest) ->
-        Logger.debug(fn -> "RECV: #{inspect(packet)}" end)
-        {:ok, packet, %__MODULE__{conn | data: rest}}
 
-      {{:error, :invalid_packet}, rest} ->
+  Returns `{:ok, packet, conn}` for a fully parsed packet, `{:incomplete, conn}`
+  when more bytes are needed, or `{:error, conn}` when the client sent a
+  malformed frame (the caller should disconnect).
+  """
+  @spec read_packet(t) :: {:ok, struct, t} | {:incomplete, t} | {:error, t}
+  def read_packet(conn) do
+    # NOTE: the error clause must come before the general one — an
+    # `{{:error, :invalid_packet}, rest}` tuple also matches `{packet, rest}`.
+    case Packet.deserialize(conn.data, conn.current_state) do
+      {:incomplete, _data} ->
+        {:incomplete, conn}
+
+      {{:error, :invalid_packet}, _rest} ->
         Logger.error(fn ->
           "Received an invalid packet from client, closing connection. #{inspect(conn.data)}"
         end)
 
-        {:ok, nil, %__MODULE__{conn | data: rest}}
+        {:error, conn}
+
+      {packet, rest} when is_binary(rest) ->
+        Logger.debug(fn -> "RECV: #{inspect(packet)}" end)
+        {:ok, packet, %__MODULE__{conn | data: rest}}
     end
   end
 

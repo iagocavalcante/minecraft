@@ -22,11 +22,13 @@ defmodule Minecraft.Protocol do
   """
   @spec send_packet(pid, struct) :: :ok | {:error, term}
   def send_packet(pid, packet) do
-    GenServer.call(pid, {:send_packet, packet})
+    # :infinity — the join-time chunk stream issues thousands of these; the
+    # default 5s timeout could spuriously crash the caller under load.
+    GenServer.call(pid, {:send_packet, packet}, :infinity)
   end
 
   def get_conn(pid) do
-    GenServer.call(pid, :get_conn)
+    GenServer.call(pid, :get_conn, :infinity)
   end
 
   def set_teleport_id(pid, teleport_id) do
@@ -39,6 +41,10 @@ defmodule Minecraft.Protocol do
 
   @impl GenServer
   def init({ref, transport, _protocol_opts}) do
+    # Trap exits so that (a) an abnormally dying linked state machine is caught
+    # here instead of silently killing us, and (b) `terminate/2` always runs to
+    # release the player from the registry.
+    Process.flag(:trap_exit, true)
     {:ok, socket} = :ranch.handshake(ref)
     conn = Connection.init(self(), socket, transport)
     :gen_server.enter_loop(__MODULE__, [], conn)
@@ -54,13 +60,47 @@ defmodule Minecraft.Protocol do
 
   def handle_info({:tcp_closed, socket}, conn) do
     Logger.info(fn -> "Client #{conn.client_ip} disconnected." end)
+    :ok = conn.transport.close(socket)
+    {:stop, :normal, conn}
+  end
 
-    if uuid = conn.assigns[:uuid] do
+  def handle_info({:tcp_error, _socket, reason}, conn) do
+    Logger.warning(fn -> "TCP error for #{conn.client_ip}: #{inspect(reason)}" end)
+    {:stop, :normal, conn}
+  end
+
+  # Our linked state machine exited (e.g. keepalive timeout). Tear the
+  # connection down with it.
+  def handle_info({:EXIT, pid, reason}, %Connection{state_machine: pid} = conn) do
+    if reason not in [:normal, :shutdown] do
+      Logger.warning(fn -> "State machine for #{conn.client_ip} exited: #{inspect(reason)}" end)
+    end
+
+    {:stop, :normal, conn}
+  end
+
+  def handle_info({:EXIT, _pid, _reason}, conn) do
+    {:noreply, conn}
+  end
+
+  def handle_info(other, conn) do
+    Logger.debug(fn -> "#{__MODULE__} ignoring unexpected message: #{inspect(other)}" end)
+    {:noreply, conn}
+  end
+
+  @impl true
+  def terminate(_reason, conn) do
+    if uuid = conn.assigns && conn.assigns[:uuid] do
       Minecraft.Users.leave(uuid)
     end
 
-    :ok = conn.transport.close(socket)
-    {:stop, :normal, conn}
+    # Stop the linked state machine explicitly: a `:normal` exit signal would
+    # otherwise be ignored by the (non-trapping) state machine, leaking it.
+    if is_pid(conn.state_machine) and Process.alive?(conn.state_machine) do
+      :gen_statem.stop(conn.state_machine)
+    end
+
+    :ok
   end
 
   @impl true
@@ -81,6 +121,12 @@ defmodule Minecraft.Protocol do
   #
   # Helpers
   #
+  defp handle_conn(%Connection{error: error} = conn) when not is_nil(error) do
+    Logger.error(fn -> "#{__MODULE__} closing connection: #{inspect(error)}" end)
+    conn = Connection.close(conn)
+    {:stop, :normal, conn}
+  end
+
   defp handle_conn(%Connection{join: true, state_machine: nil} = conn) do
     {:ok, state_machine} = Minecraft.StateMachine.start_link(self())
     handle_conn(%Connection{conn | state_machine: state_machine})
@@ -95,6 +141,11 @@ defmodule Minecraft.Protocol do
     case Connection.read_packet(conn) do
       {:ok, packet, conn} ->
         handle_packet(packet, conn)
+
+      {:incomplete, conn} ->
+        # Not enough bytes buffered for a full packet; wait for more.
+        conn = Connection.continue(conn)
+        {:noreply, conn}
 
       {:error, conn} ->
         conn = Connection.close(conn)

@@ -31,8 +31,11 @@ defmodule Minecraft.Crypto do
 
   @doc """
   Decrypts a message.
+
+  Returns `{:ok, plaintext}` or `{:error, :decrypt_failed}` when the client
+  supplied garbage ciphertext (bad length/padding).
   """
-  @spec decrypt(message :: binary) :: binary
+  @spec decrypt(message :: binary) :: {:ok, binary} | {:error, :decrypt_failed}
   def decrypt(message) do
     GenServer.call(__MODULE__, {:decrypt, message})
   end
@@ -70,8 +73,14 @@ defmodule Minecraft.Crypto do
   end
 
   def handle_call({:decrypt, message}, _from, %{priv_key: priv_key} = state) do
-    message = :public_key.decrypt_private(message, priv_key)
-    {:reply, message, state}
+    reply =
+      try do
+        {:ok, :public_key.decrypt_private(message, priv_key)}
+      rescue
+        _ -> {:error, :decrypt_failed}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:encrypt, message}, _from, %{pub_key: pub_key} = state) do

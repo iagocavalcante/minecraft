@@ -40,22 +40,65 @@ defmodule Minecraft.Packet do
           | Server.Play.WindowItems.t()
           | Server.Play.TimeUpdate.t()
 
+  # Vanilla caps a single packet at 2^21 - 1 bytes.
+  @max_packet_size 2_097_151
+
   @doc """
   Given a raw binary packet, deserializes it into a `Packet` struct.
+
+  Returns one of:
+
+    * `{packet, rest}` — a fully parsed packet plus any trailing bytes.
+    * `{:incomplete, data}` — not enough bytes have arrived yet; the caller
+      should buffer `data` and wait for more.
+    * `{{:error, :invalid_packet}, rest}` — the frame was malformed; the caller
+      should disconnect. `rest` is the buffer past this (bogus) frame.
   """
   @spec deserialize(binary, state :: atom, type :: :client | :server) ::
-          {packet :: term, rest :: binary} | {:error, :invalid_packet}
+          {packet :: term, rest :: binary}
+          | {:incomplete, binary}
+          | {{:error, :invalid_packet}, binary}
   def deserialize(data, state, type \\ :client) do
-    {packet_size, data} = decode_varint(data)
-    <<data::binary-size(packet_size), rest::binary>> = data
-    {packet_id, data} = decode_varint(data)
+    case decode_varint(data) do
+      # Length prefix not fully received yet — keep buffering.
+      {:error, :too_short} ->
+        {:incomplete, data}
 
-    case do_deserialize({state, packet_id, type}, data) do
-      {packet, ""} ->
-        {packet, rest}
+      # Over-long / malformed length prefix — protocol error.
+      {:error, _} ->
+        {{:error, :invalid_packet}, ""}
 
-      error ->
-        {error, rest}
+      {packet_size, _rest} when packet_size <= 0 or packet_size > @max_packet_size ->
+        {{:error, :invalid_packet}, ""}
+
+      # Body declared but not fully received yet — keep buffering.
+      {packet_size, rest} when byte_size(rest) < packet_size ->
+        {:incomplete, data}
+
+      {packet_size, rest} ->
+        <<body::binary-size(packet_size), rest::binary>> = rest
+        deserialize_body(body, rest, state, type)
+    end
+  end
+
+  defp deserialize_body(body, rest, state, type) do
+    case decode_varint(body) do
+      {:error, _} ->
+        {{:error, :invalid_packet}, rest}
+
+      {packet_id, data} ->
+        # Deserializers assume well-formed input; a malformed body should close
+        # the connection, not crash the process.
+        try do
+          do_deserialize({state, packet_id, type}, data)
+        rescue
+          _ -> {:error, :invalid_packet}
+        else
+          {:error, :invalid_packet} -> {{:error, :invalid_packet}, rest}
+          {packet, ""} -> {packet, rest}
+          # Body had trailing bytes the deserializer didn't consume.
+          {_packet, _leftover} -> {{:error, :invalid_packet}, rest}
+        end
     end
   end
 
@@ -211,7 +254,7 @@ defmodule Minecraft.Packet do
     decode_varint(rest, num_read + 1, acc + (value <<< (7 * num_read)))
   end
 
-  defp decode_varint(<<0::1, value::7, rest::binary>>, num_read, acc) do
+  defp decode_varint(<<0::1, value::7, rest::binary>>, num_read, acc) when num_read < 5 do
     result = acc + (value <<< (7 * num_read))
     <<result::32-signed>> = <<result::32-unsigned>>
     {result, rest}
@@ -233,7 +276,7 @@ defmodule Minecraft.Packet do
     decode_varlong(rest, num_read + 1, acc + (value <<< (7 * num_read)))
   end
 
-  defp decode_varlong(<<0::1, value::7, rest::binary>>, num_read, acc) do
+  defp decode_varlong(<<0::1, value::7, rest::binary>>, num_read, acc) when num_read < 10 do
     result = acc + (value <<< (7 * num_read))
     <<result::64-signed>> = <<result::64-unsigned>>
     {result, rest}

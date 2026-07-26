@@ -80,23 +80,42 @@ defmodule Minecraft.Users do
   end
 
   def handle_call({:get_by_username, username}, _from, %{users: users} = state) do
-    {:reply, Enum.find(users, fn {_uuid, user} -> user.username == username end), state}
+    user =
+      case Enum.find(users, fn {_uuid, user} -> user.username == username end) do
+        {_uuid, user} -> user
+        nil -> nil
+      end
+
+    {:reply, user, state}
   end
 
   @impl true
   def handle_cast({:update_look, uuid, look}, state) do
-    users = Map.update!(state.users, uuid, fn user -> %User{user | look: look} end)
+    # Ignore updates for unknown users (e.g. after a Users restart) rather than
+    # crashing the shared registry with a KeyError.
+    users =
+      case Map.fetch(state.users, uuid) do
+        {:ok, user} -> Map.put(state.users, uuid, %User{user | look: look})
+        :error -> state.users
+      end
+
     {:noreply, %{state | users: users}}
   end
 
   def handle_cast({:update_position, uuid, position}, state) do
-    users = Map.update!(state.users, uuid, fn user -> %User{user | position: position} end)
+    users =
+      case Map.fetch(state.users, uuid) do
+        {:ok, user} -> Map.put(state.users, uuid, %User{user | position: position})
+        :error -> state.users
+      end
+
     {:noreply, %{state | users: users}}
   end
 
   def handle_cast({:leave, uuid}, %State{} = state) do
     logged_in = MapSet.delete(state.logged_in, uuid)
-    {:noreply, %State{state | logged_in: logged_in}}
+    users = Map.delete(state.users, uuid)
+    {:noreply, %State{state | logged_in: logged_in, users: users}}
   end
 
   def handle_cast({:join, uuid, username}, state) do
