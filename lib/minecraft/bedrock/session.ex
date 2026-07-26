@@ -269,21 +269,27 @@ defmodule Minecraft.Bedrock.Session do
   # the client (dragonfly documents the same), so the request is dropped when
   # a window is open.
   defp handle_game_packet({:interact, %{action: :open_inventory}}, state) do
-    if state.inventory_open do
-      state
-    else
-      Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
+    cond do
+      System.get_env("BEDROCK_NO_CONTAINER_OPEN") ->
+        Logger.info("Bedrock: ContainerOpen suppressed (debug kill-switch)")
+        state
 
-      position =
-        case state.position do
-          {px, py, pz} -> {trunc(px), trunc(py), trunc(pz)}
-          nil -> {0, 0, 0}
-        end
+      state.inventory_open ->
+        state
 
-      # Window 0 = player inventory, container type 0xFF (-1) = own inventory,
-      # entity unique ID -1 (not an entity-backed container).
-      state = send_game_packet(state, Packet.encode_container_open(0, 0xFF, position, -1))
-      %{state | inventory_open: true}
+      true ->
+        Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
+
+        position =
+          case state.position do
+            {px, py, pz} -> {trunc(px), trunc(py), trunc(pz)}
+            nil -> {0, 0, 0}
+          end
+
+        # Window 0 = player inventory, container type 0xFF (-1) = own inventory,
+        # entity unique ID -1 (not an entity-backed container).
+        state = send_game_packet(state, Packet.encode_container_open(0, 0xFF, position, -1))
+        %{state | inventory_open: true}
     end
   end
 
@@ -374,13 +380,27 @@ defmodule Minecraft.Bedrock.Session do
     # gophertunnel sends ItemRegistry immediately after StartGame; the full
     # vanilla table is required for the client's item/inventory UI.
     state = send_game_packet(state, Packet.encode_item_registry(Minecraft.Bedrock.Items.all()))
-    state = send_game_packet(state, encode_creative_inventory())
+
+    # Debug kill-switch for bisecting client crashes; unset in normal operation.
+    state =
+      if System.get_env("BEDROCK_NO_CREATIVE") do
+        state
+      else
+        send_game_packet(state, encode_creative_inventory())
+      end
 
     # Initial (empty) player inventory windows: main inventory, offhand,
     # armour. The client won't open its inventory UI without them.
-    state = send_game_packet(state, Packet.encode_inventory_content(0, 36))
-    state = send_game_packet(state, Packet.encode_inventory_content(119, 1))
-    state = send_game_packet(state, Packet.encode_inventory_content(120, 4))
+    state =
+      if System.get_env("BEDROCK_NO_INVENTORY_CONTENT") do
+        state
+      else
+        state
+        |> send_game_packet(Packet.encode_inventory_content(0, 36))
+        |> send_game_packet(Packet.encode_inventory_content(119, 1))
+        |> send_game_packet(Packet.encode_inventory_content(120, 4))
+      end
+
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end
