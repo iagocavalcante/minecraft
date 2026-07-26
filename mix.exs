@@ -84,7 +84,7 @@ defmodule Minecraft.MixProject do
       maintainers: ["Michael Oliver"],
       licenses: ["MIT"],
       links: %{"GitHub" => @project_url},
-      files: ~w(README.md LICENSE mix.exs lib)
+      files: ~w(README.md LICENSE mix.exs lib src Makefile)
     ]
   end
 end

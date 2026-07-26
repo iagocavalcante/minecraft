@@ -1,16 +1,29 @@
 #include "perlin.h"
 #include <math.h>
-#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 int p[512];
 int p2[512];
 
+/*
+ * splitmix64: a small, fast, fully deterministic PRNG. Replaces srand()/rand(),
+ * which are process-global (not thread-safe) and produce different sequences
+ * across libc implementations — meaning the same world seed yielded different
+ * terrain on different platforms.
+ */
+static uint64_t splitmix64(uint64_t *state) {
+  uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  return z ^ (z >> 31);
+}
+
 void initialize_random(unsigned seed) {
-  srand(seed);
+  uint64_t state = seed;
   for (unsigned i = 0; i < 512; i++) {
-    p[i] = rand() % 256;
-    p2[i] = rand() % 4096;
+    p[i] = (int)(splitmix64(&state) % 256);
+    p2[i] = (int)(splitmix64(&state) % 4096);
   }
 }
 

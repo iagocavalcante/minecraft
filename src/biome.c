@@ -22,7 +22,7 @@ static void init_zone(int zone_x, int zone_z, struct Zone* zone) {
   zone->count = p[xorhash(zone_x ^ zone_z)] / 26;
   for (int i = 0; i < zone->count; i++) {
     zone->x[i] =
-        p2[xorhash(p[i] ^ p[zone_x * zone_z])] % (chunks_per_zone * 16);
+        p2[xorhash(p[i] ^ p[xorhash(zone_x * zone_z)])] % (chunks_per_zone * 16);
     zone->z[i] =
         p2[xorhash((i * 97 - 2) ^ (zone_x * 131 - 17) ^ (zone_z * 29 - 89))] %
         (chunks_per_zone * 16);

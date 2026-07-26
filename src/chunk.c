@@ -16,6 +16,9 @@ static uint8_t rand2[64] = {2,  7,  7, 1,  7, 6,  9,  12, 4,  6,  12, 3,  4,
 struct ChunkSection *generate_chunk_section(uint8_t *heightmap,
                                             int32_t chunk_y) {
   struct ChunkSection *chunk_section = enif_alloc(sizeof(struct ChunkSection));
+  if (chunk_section == NULL) {
+    return NULL;
+  }
   chunk_section->y = chunk_y;
   for (uint32_t y = 0; y < 16; y++) {
     unsigned block_y = chunk_y * 16 + y;
@@ -27,7 +30,7 @@ struct ChunkSection *generate_chunk_section(uint8_t *heightmap,
         uint16_t type;
         if (block_y == m) {
           type = MC_BEDROCK;
-        } else if (block_y < (uint8_t)(heightmap[z * 16 + x] - m)) {
+        } else if ((int)block_y < (int)heightmap[z * 16 + x] - (int)m) {
           type = MC_STONE;
         } else if (block_y < heightmap[z * 16 + x]) {
           if (block_y < 64) {
@@ -69,11 +72,10 @@ ERL_NIF_TERM serialize_chunk_section(ErlNifEnv *env,
   const uint64_t value_mask = (1UL << bits_per_block) - 1;
   const uint8_t palette = 0;
   const uint16_t data_array_length = 16 * 16 * 16 * bits_per_block / 64;
-  const uint16_t data_array_length_encoded = bswap_16(0xC006);
   const size_t total_size_bytes =
       sizeof(uint8_t)                         // bits_per_block
       + sizeof(uint8_t)                       // palette
-      + sizeof(uint16_t)                      // data_array_length
+      + sizeof(uint16_t)                      // data_array_length (VarInt, 2B)
       + sizeof(uint64_t) * data_array_length  // data
       + sizeof(uint8_t) * (16 * 16 * 16);     // block light and sky light
   uint8_t *raw = (uint8_t *)enif_make_new_binary(env, total_size_bytes,
@@ -85,10 +87,17 @@ ERL_NIF_TERM serialize_chunk_section(ErlNifEnv *env,
   *raw++ = bits_per_block;
   *raw++ = palette;
 
-  uint16_t *raw16 = (uint16_t *)raw;
-  *raw16++ = data_array_length_encoded;
+  // data_array_length = 832 as a VarInt is the two bytes 0xC0 0x06. Written
+  // explicitly rather than via a byte-swapped uint16_t store, which was both a
+  // strict-aliasing violation and correct only on little-endian hosts.
+  *raw++ = 0xC0;
+  *raw++ = 0x06;
 
-  uint64_t *data = (uint64_t *)raw16;
+  // Pack into a properly aligned local buffer. `raw` points 4 bytes into the
+  // binary, so a uint64_t* onto it would be misaligned (UB / SIGBUS on some
+  // targets).
+  uint64_t data[16 * 16 * 16 * 13 / 64];
+  memset(data, 0, sizeof(data));
 
   for (uint32_t y = 0; y < 16; y++) {
     for (uint32_t z = 0; z < 16; z++) {
@@ -110,11 +119,14 @@ ERL_NIF_TERM serialize_chunk_section(ErlNifEnv *env,
     }
   }
 
+  // Emit each long big-endian, byte by byte, so output is identical regardless
+  // of host endianness.
   for (uint16_t i = 0; i < data_array_length; i++) {
-    data[i] = bswap_64(data[i]);
+    uint64_t v = data[i];
+    for (int b = 7; b >= 0; b--) {
+      *raw++ = (uint8_t)(v >> (b * 8));
+    }
   }
-
-  raw = (uint8_t *)(data + data_array_length);
 
   // Block Light
   for (uint32_t y = 0; y < 16; y++) {

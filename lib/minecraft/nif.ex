@@ -26,7 +26,7 @@ defmodule Minecraft.NIF do
   Note that these must be chunk coordinates, as they get multiplied by 16
   in the NIF.
   """
-  @spec generate_chunk(float, float) :: {:ok, any} | {:error, any}
+  @spec generate_chunk(integer, integer) :: {:ok, any} | {:error, any}
   def generate_chunk(_chunk_x, _chunk_z) do
     # Don't raise here, or Dialyzer complains
     :erlang.nif_error("NIF generate_chunk/2 not implemented")

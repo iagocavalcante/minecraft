@@ -9,5 +9,6 @@ endif
 
 all: priv/nifs.so
 
-priv/nifs.so: src/nifs.c src/perlin.c src/chunk.c src/biome.c
+priv/nifs.so: src/nifs.c src/perlin.c src/chunk.c src/biome.c src/perlin.h src/chunk.h src/biome.h src/compat.h
+	mkdir -p priv
 	cc -Wall -Wextra -Wpedantic -O3 -fPIC -shared -std=c99 $(LDFLAGS) -I$(ERL_INCLUDE_PATH) -o priv/nifs.so src/nifs.c src/perlin.c src/chunk.c src/biome.c
