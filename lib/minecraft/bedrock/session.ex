@@ -214,9 +214,36 @@ defmodule Minecraft.Bedrock.Session do
     handle_player_initialised(state)
   end
 
+  # PlayerBlockAction: PredictDestroyBlock — the client (in creative, or with
+  # server-auth breaking) predicts the block is gone; the server applies it.
+  @action_predict_destroy_block 26
+
   defp handle_game_packet({:player_auth_input, %{position: position} = input}, state) do
-    # ~20/s — just track the latest position/rotation, no reply.
-    %{state | position: position, rotation: {input.pitch, input.yaw, input.head_yaw}}
+    # ~20/s — track the latest position/rotation, then apply any block
+    # actions and item interactions this tick carried.
+    state = %{state | position: position, rotation: {input.pitch, input.yaw, input.head_yaw}}
+
+    state =
+      Enum.reduce(Map.get(input, :block_actions, []), state, fn
+        {@action_predict_destroy_block, {x, y, z}, _face}, st ->
+          handle_break_block({x, y, z}, st)
+
+        {_action, _pos, _face}, st ->
+          st
+      end)
+
+    case Map.get(input, :item_interaction) do
+      %{action_type: 0} = interaction ->
+        handle_place_block(
+          interaction.block_position,
+          interaction.face,
+          interaction.held_block_runtime_id,
+          state
+        )
+
+      _ ->
+        state
+    end
   end
 
   defp handle_game_packet(

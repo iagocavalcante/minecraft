@@ -408,24 +408,36 @@ defmodule Minecraft.Bedrock.Packet do
     {:set_local_player_as_initialised, %{}}
   end
 
-  # PlayerAuthInput — sent ~20/s by the client with its position and inputs.
-  # Only the fields up to Tick are parsed; the trailing fixed fields and the
-  # flag-gated conditionals are irrelevant for position tracking.
+  # PlayerAuthInput InputData bitset flags (bit numbers).
+  @input_flag_perform_item_interaction 34
+  @input_flag_perform_block_actions 35
+  @input_flag_perform_item_stack_request 36
+
+  # PlayerBlockAction actions that carry a block position + face:
+  # StartBreak, AbortBreak, CrackBreak, PredictDestroyBlock, ContinueDestroyBlock.
+  @block_actions_with_position [0, 1, 18, 26, 27]
+
+  # PlayerAuthInput — sent ~20/s by the client. Carries position/rotation
+  # always, and (gated by InputData bits) the block actions used for
+  # server-authoritative block breaking, which modern clients use regardless
+  # of the ServerAuthoritativeBlockBreaking setting in StartGame.
   defp decode_by_id(@player_auth_input, rest) do
     <<pitch::32-little-float, yaw::32-little-float, px::32-little-float, py::32-little-float,
       pz::32-little-float, _move_vec::binary-size(8), head_yaw::32-little-float, rest::binary>> =
       rest
 
     # InputData is a bitset marshaled as one unbounded LEB128 varint.
-    {_input_data, rest} = Codec.decode_varuint(rest)
+    {input_data, rest} = Codec.decode_varuint(rest)
     {_input_mode, rest} = Codec.decode_varuint(rest)
     {_play_mode, rest} = Codec.decode_varuint(rest)
     {_interaction_model, rest} = Codec.decode_varuint(rest)
     <<_interact_pitch::32-little-float, _interact_yaw::32-little-float, rest::binary>> = rest
-    {tick, _rest} = Codec.decode_varuint(rest)
+    {tick, rest} = Codec.decode_varuint(rest)
+    <<_delta::binary-size(12), rest::binary>> = rest
 
-    {:player_auth_input,
-     %{position: {px, py, pz}, pitch: pitch, yaw: yaw, head_yaw: head_yaw, tick: tick}}
+    base = %{position: {px, py, pz}, pitch: pitch, yaw: yaw, head_yaw: head_yaw, tick: tick}
+
+    {:player_auth_input, Map.merge(base, decode_auth_input_conditionals(input_data, rest))}
   end
 
   # InventoryTransaction — carries block breaking/placing in client-authoritative
@@ -669,6 +681,132 @@ defmodule Minecraft.Bedrock.Packet do
   end
 
   defp encode_varint_unsigned64(value), do: Codec.encode_varuint(value)
+
+  # Parses the flag-gated tail of PlayerAuthInput. Marshal order after Delta:
+  # ItemInteraction (bit 34), ItemStackRequest (bit 36, encoded between 34 and
+  # 35 per struct order in gophertunnel), BlockActions (bit 35). An
+  # ItemStackRequest cannot be skipped safely, so when present the rest of the
+  # tail is dropped for that tick (movement data is already extracted).
+  defp decode_auth_input_conditionals(input_data, rest) do
+    require Logger
+
+    {item_interaction, rest} =
+      if bit_set?(input_data, @input_flag_perform_item_interaction) do
+        decode_player_inventory_action(rest)
+      else
+        {nil, rest}
+      end
+
+    cond do
+      rest == :parse_failed ->
+        %{item_interaction: nil, block_actions: []}
+
+      bit_set?(input_data, @input_flag_perform_item_stack_request) ->
+        if bit_set?(input_data, @input_flag_perform_block_actions) do
+          Logger.debug(
+            "Bedrock: PlayerAuthInput with ItemStackRequest — block actions dropped this tick"
+          )
+        end
+
+        %{item_interaction: item_interaction, block_actions: []}
+
+      bit_set?(input_data, @input_flag_perform_block_actions) ->
+        {actions, _rest} = decode_block_actions(rest)
+        %{item_interaction: item_interaction, block_actions: actions}
+
+      true ->
+        %{item_interaction: item_interaction, block_actions: []}
+    end
+  end
+
+  # PlayerInventoryAction (PlayerAuthInput bit 34) — an inline UseItem
+  # transaction in the OLD wire formats (varuint action/trigger, varint face,
+  # legacy item encoding), per gophertunnel Reader.PlayerInventoryAction.
+  # Only the fields needed for block placement are extracted; a parse failure
+  # drops the rest of the tail for this tick.
+  defp decode_player_inventory_action(data) do
+    {legacy_request_id, rest} = decode_varint_signed_raw(data)
+
+    rest =
+      if legacy_request_id < -1 and (legacy_request_id &&& 1) == 0 do
+        skip_legacy_set_item_slots(rest)
+      else
+        rest
+      end
+
+    {action_count, rest} = Codec.decode_varuint(rest)
+    rest = Enum.reduce(1..action_count//1, rest, fn _, r -> skip_inventory_action_old(r) end)
+    {action_type, rest} = Codec.decode_varuint(rest)
+    {_trigger_type, rest} = Codec.decode_varuint(rest)
+    {bx, rest} = decode_varint_signed_raw(rest)
+    {by, rest} = decode_varint_signed_raw(rest)
+    {bz, rest} = decode_varint_signed_raw(rest)
+    {face, rest} = decode_varint_signed_raw(rest)
+    {_hotbar_slot, rest} = decode_varint_signed_raw(rest)
+    {held_block_runtime_id, rest} = skip_item_instance_legacy(rest)
+    <<_player_pos::binary-size(12), _clicked_pos::binary-size(12), rest::binary>> = rest
+    {_block_runtime_id, rest} = Codec.decode_varuint(rest)
+
+    {%{
+       action_type: action_type,
+       block_position: {bx, by, bz},
+       face: face,
+       held_block_runtime_id: held_block_runtime_id
+     }, rest}
+  rescue
+    _ -> {nil, :parse_failed}
+  end
+
+  # Old-format InventoryAction (no presence bools around window ID / flags).
+  defp skip_inventory_action_old(data) do
+    {source_type, rest} = Codec.decode_varuint(data)
+
+    rest =
+      case source_type do
+        # 0 = container, 100 = TODO/crafting: varint window ID
+        s when s in [0, 100] ->
+          {_window_id, r} = decode_varint_signed_raw(rest)
+          r
+
+        # 2 = world interaction: varuint flags
+        2 ->
+          {_flags, r} = Codec.decode_varuint(rest)
+          r
+
+        _ ->
+          rest
+      end
+
+    {_inventory_slot, rest} = Codec.decode_varuint(rest)
+    {_old_id, rest} = skip_item_instance_legacy(rest)
+    {_new_id, rest} = skip_item_instance_legacy(rest)
+    rest
+  end
+
+  # SliceVarint32Length of PlayerBlockAction: zigzag count, then per action a
+  # zigzag action ID plus BlockPos + zigzag face for position-carrying actions.
+  defp decode_block_actions(data) do
+    {count, rest} = decode_varint_signed_raw(data)
+
+    {actions, rest} =
+      Enum.reduce(1..count//1, {[], rest}, fn _, {acc, r} ->
+        {action, r} = decode_varint_signed_raw(r)
+
+        if action in @block_actions_with_position do
+          {x, r} = decode_varint_signed_raw(r)
+          {y, r} = decode_varint_signed_raw(r)
+          {z, r} = decode_varint_signed_raw(r)
+          {face, r} = decode_varint_signed_raw(r)
+          {[{action, {x, y, z}, face} | acc], r}
+        else
+          {[{action, nil, nil} | acc], r}
+        end
+      end)
+
+    {Enum.reverse(actions), rest}
+  end
+
+  defp bit_set?(value, bit), do: (value >>> bit &&& 1) == 1
 
   # Skips a LegacySetItemSlot slice: varuint count, each entry a uint8
   # container ID plus a varuint-length byte slice of slots.
