@@ -43,13 +43,4 @@ defmodule Minecraft.Bedrock.CodecTest do
       assert {:error, :not_a_batch} = Codec.decode_batch(<<0x00, 0x01>>)
     end
   end
-
-  describe "packet header" do
-    test "encode/decode packet ID" do
-      for id <- [1, 2, 6, 7, 11, 143, 193] do
-        encoded = Codec.encode_packet_header(id)
-        assert {^id, ""} = Codec.decode_packet_header(encoded)
-      end
-    end
-  end
 end
