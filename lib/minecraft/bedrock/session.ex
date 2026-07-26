@@ -34,7 +34,8 @@ defmodule Minecraft.Bedrock.Session do
     rotation: nil,
     chunk_radius: nil,
     center_chunk: nil,
-    sent_chunks: MapSet.new()
+    sent_chunks: MapSet.new(),
+    inventory_open: false
   ]
 
   # Java 1.12 global block types (id <<< 4 ||| meta).
@@ -264,11 +265,26 @@ defmodule Minecraft.Bedrock.Session do
     handle_place_block(tx.block_position, tx.face, tx.held_block_runtime_id, state)
   end
 
+  # Answering an already-open inventory with a second ContainerOpen crashes
+  # the client (dragonfly documents the same), so the request is dropped when
+  # a window is open.
   defp handle_game_packet({:interact, %{action: :open_inventory}}, state) do
-    Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
-    # Window 0 = player inventory, container type 0xFF (-1) = own inventory;
-    # the entity unique ID matches StartGame's entity_id.
-    send_game_packet(state, Packet.encode_container_open(0, 0xFF, {0, 0, 0}, 1))
+    if state.inventory_open do
+      state
+    else
+      Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
+
+      position =
+        case state.position do
+          {px, py, pz} -> {trunc(px), trunc(py), trunc(pz)}
+          nil -> {0, 0, 0}
+        end
+
+      # Window 0 = player inventory, container type 0xFF (-1) = own inventory,
+      # entity unique ID -1 (not an entity-backed container).
+      state = send_game_packet(state, Packet.encode_container_open(0, 0xFF, position, -1))
+      %{state | inventory_open: true}
+    end
   end
 
   defp handle_game_packet({:interact, _other}, state) do
@@ -277,7 +293,8 @@ defmodule Minecraft.Bedrock.Session do
 
   defp handle_game_packet({:container_close, %{window_id: w, container_type: t}}, state) do
     # The client expects its close report to be acked.
-    send_game_packet(state, Packet.encode_container_close(w, t, false))
+    state = send_game_packet(state, Packet.encode_container_close(w, t, false))
+    %{state | inventory_open: false}
   end
 
   defp handle_game_packet(other, state) do
