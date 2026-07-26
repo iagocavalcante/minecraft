@@ -86,4 +86,18 @@ defmodule Minecraft.NIF do
     # Don't raise here, or Dialyzer complains
     :erlang.nif_error("NIF section_block_types/2 not implemented")
   end
+
+  @doc """
+  Sets one block in a chunk. `x`/`z` are chunk-local (0..15), `y` is 0..255,
+  `type` is a Java 1.12 global block type (`id <<< 4 ||| meta`). Grows the
+  chunk with air sections when placing above generated terrain.
+
+  Must only be called from the `Minecraft.World` process so writes are
+  serialized.
+  """
+  @spec set_block(any, 0..15, 0..255, 0..15, 0..0xFFFF) :: :ok | :error
+  def set_block(_chunk, _x, _y, _z, _type) do
+    # Don't raise here, or Dialyzer complains
+    :erlang.nif_error("NIF set_block/5 not implemented")
+  end
 end

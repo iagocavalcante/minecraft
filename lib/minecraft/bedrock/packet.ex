@@ -13,12 +13,15 @@ defmodule Minecraft.Bedrock.Packet do
   @resource_pack_stack 0x07
   @resource_pack_client_response 0x08
   @start_game 0x0B
+  @update_block 0x15
+  @inventory_transaction 0x1E
   @request_chunk_radius 0x45
   @chunk_radius_updated 0x46
   @level_chunk 0x3A
   @set_local_player_as_initialised 0x71
   @network_chunk_publisher_update 0x79
   @network_settings 0x8F
+  @player_auth_input 0x90
   @request_network_settings 0xC1
 
   # =====================
@@ -107,14 +110,37 @@ defmodule Minecraft.Bedrock.Packet do
   @doc "NetworkChunkPublisherUpdate — tell client chunks are available"
   def encode_network_chunk_publisher_update(x, y, z, radius) do
     body = <<
+      # Position (BlockPos — 3x varint32 zigzag)
       encode_varint_signed(x)::binary,
-      encode_varint_unsigned(y)::binary,
+      encode_varint_signed(y)::binary,
       encode_varint_signed(z)::binary,
       encode_varint_unsigned(radius)::binary,
       0::32-little
     >>
 
     wrap(@network_chunk_publisher_update, body)
+  end
+
+  @doc """
+  UpdateBlock — replace one block client-side. `block_runtime_id` is the
+  unsigned network block hash of the new block.
+  """
+  def encode_update_block(x, y, z, block_runtime_id) do
+    body =
+      IO.iodata_to_binary([
+        # Position (BlockPos — 3x varint32 zigzag)
+        encode_varint_signed(x),
+        encode_varint_signed(y),
+        encode_varint_signed(z),
+        # NewBlockRuntimeID (varuint32)
+        encode_varint_unsigned(block_runtime_id),
+        # Flags (varuint32) — Neighbours ||| Network
+        encode_varint_unsigned(0b11),
+        # Layer (varuint32)
+        encode_varint_unsigned(0)
+      ])
+
+    wrap(@update_block, body)
   end
 
   @doc "LevelChunk — send chunk data to client (protocol 924)"
@@ -177,11 +203,9 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::8>>,
         # Difficulty (easy)
         encode_varint_signed(1),
-        # WorldSpawn.X (UBlockPos)
+        # WorldSpawn (BlockPos — 3x varint32 zigzag)
         encode_varint_signed(spx),
-        # WorldSpawn.Y
-        encode_varint_unsigned(spy),
-        # WorldSpawn.Z
+        encode_varint_signed(spy),
         encode_varint_signed(spz),
         # AchievementsDisabled (false!)
         <<0::8>>,
@@ -384,6 +408,80 @@ defmodule Minecraft.Bedrock.Packet do
     {:set_local_player_as_initialised, %{}}
   end
 
+  # PlayerAuthInput — sent ~20/s by the client with its position and inputs.
+  # Only the fields up to Tick are parsed; the trailing fixed fields and the
+  # flag-gated conditionals are irrelevant for position tracking.
+  defp decode_by_id(@player_auth_input, rest) do
+    <<pitch::32-little-float, yaw::32-little-float, px::32-little-float, py::32-little-float,
+      pz::32-little-float, _move_vec::binary-size(8), head_yaw::32-little-float, rest::binary>> =
+      rest
+
+    # InputData is a bitset marshaled as one unbounded LEB128 varint.
+    {_input_data, rest} = Codec.decode_varuint(rest)
+    {_input_mode, rest} = Codec.decode_varuint(rest)
+    {_play_mode, rest} = Codec.decode_varuint(rest)
+    {_interaction_model, rest} = Codec.decode_varuint(rest)
+    <<_interact_pitch::32-little-float, _interact_yaw::32-little-float, rest::binary>> = rest
+    {tick, _rest} = Codec.decode_varuint(rest)
+
+    {:player_auth_input,
+     %{position: {px, py, pz}, pitch: pitch, yaw: yaw, head_yaw: head_yaw, tick: tick}}
+  end
+
+  # InventoryTransaction — carries block breaking/placing in client-authoritative
+  # mode (ServerAuthoritativeBlockBreaking is false in StartGame).
+  defp decode_by_id(@inventory_transaction, rest) do
+    {_legacy_request_id, rest} = decode_varint_signed_raw(rest)
+    <<has_legacy::8, rest::binary>> = rest
+    rest = if has_legacy == 0, do: rest, else: skip_legacy_set_item_slots(rest)
+    <<has_type::8, rest::binary>> = rest
+
+    {transaction_type, rest} =
+      if has_type == 0, do: {:none, rest}, else: Codec.decode_varuint(rest)
+
+    <<has_actions::8, rest::binary>> = rest
+
+    rest =
+      if has_actions == 0 do
+        rest
+      else
+        {action_count, rest} = Codec.decode_varuint(rest)
+        Enum.reduce(1..action_count//1, rest, fn _, r -> skip_inventory_action(r) end)
+      end
+
+    # 2 = UseItem — the only transaction type acted on.
+    if transaction_type == 2 do
+      {action_type, rest} = decode_varint_signed_raw(rest)
+      <<_trigger_type::8, rest::binary>> = rest
+      {bx, rest} = decode_varint_signed_raw(rest)
+      {by, rest} = decode_varint_signed_raw(rest)
+      {bz, rest} = decode_varint_signed_raw(rest)
+      <<face::8, rest::binary>> = rest
+      {_hotbar_slot, rest} = decode_varint_signed_raw(rest)
+      held_block_runtime_id = parse_held_block_runtime_id(rest)
+
+      action =
+        case action_type do
+          0 -> :click_block
+          1 -> :click_air
+          2 -> :break_block
+          3 -> :use_as_attack
+          other -> {:unknown, other}
+        end
+
+      {:inventory_transaction,
+       %{
+         type: :use_item,
+         action: action,
+         block_position: {bx, by, bz},
+         face: face,
+         held_block_runtime_id: held_block_runtime_id
+       }}
+    else
+      {:inventory_transaction, %{type: transaction_type}}
+    end
+  end
+
   # ClientCacheStatus (0x81 = 129) — client tells us if it supports blob cache
   defp decode_by_id(0x81, <<supported::8, _rest::binary>>) do
     {:client_cache_status, %{supported: supported != 0}}
@@ -571,6 +669,117 @@ defmodule Minecraft.Bedrock.Packet do
   end
 
   defp encode_varint_unsigned64(value), do: Codec.encode_varuint(value)
+
+  # Skips a LegacySetItemSlot slice: varuint count, each entry a uint8
+  # container ID plus a varuint-length byte slice of slots.
+  defp skip_legacy_set_item_slots(data) do
+    {count, rest} = Codec.decode_varuint(data)
+
+    Enum.reduce(1..count//1, rest, fn _, r ->
+      <<_container_id::8, r::binary>> = r
+      {len, r} = Codec.decode_varuint(r)
+      <<_slots::binary-size(len), r::binary>> = r
+      r
+    end)
+  end
+
+  # Skips one InventoryAction (protocol.InventoryAction marshal order).
+  defp skip_inventory_action(data) do
+    {_source_type, rest} = Codec.decode_varuint(data)
+    <<_present1::8, has_container_id::8, rest::binary>> = rest
+    rest = if has_container_id == 0, do: rest, else: skip_bytes(rest, 1)
+    <<_present2::8, has_flags::8, rest::binary>> = rest
+
+    rest =
+      if has_flags == 0 do
+        rest
+      else
+        {_flags, r} = Codec.decode_varuint(rest)
+        r
+      end
+
+    {_inventory_slot, rest} = Codec.decode_varuint(rest)
+    {_old_block_id, rest} = skip_item_instance(rest)
+    {_new_block_id, rest} = skip_item_instance(rest)
+    rest
+  end
+
+  # Extracts the held item's block runtime ID from a UseItem transaction tail.
+  #
+  # Two item wire formats are seen in the wild for protocol 1001: gophertunnel
+  # reads an always-full li16-id form (ItemInstanceNew), while prismarine's
+  # protocol data uses the legacy zigzag-id form where network ID 0 ends the
+  # item immediately. Try both; an unparseable item degrades to 0 (empty hand)
+  # rather than failing the whole transaction, since breaking doesn't need the
+  # item at all and placing has a fallback.
+  defp parse_held_block_runtime_id(data) do
+    try do
+      {id, _rest} = skip_item_instance(data)
+      id
+    rescue
+      _ ->
+        try do
+          {id, _rest} = skip_item_instance_legacy(data)
+          id
+        rescue
+          _ -> 0
+        end
+    end
+  end
+
+  # ItemInstanceNew wire format (li16 id, all fields always present).
+  defp skip_item_instance(data) do
+    <<_network_id::16-little-signed, _count::16-little, rest::binary>> = data
+    {_metadata, rest} = Codec.decode_varuint(rest)
+    <<has_net_id::8, rest::binary>> = rest
+
+    rest =
+      if has_net_id == 0 do
+        rest
+      else
+        {_empty, r} = Codec.decode_varuint(rest)
+        {_stack_net_id, r} = decode_varint_signed_raw(r)
+        r
+      end
+
+    {block_runtime_id, rest} = Codec.decode_varuint(rest)
+    {extra_len, rest} = Codec.decode_varuint(rest)
+    <<_extra::binary-size(extra_len), rest::binary>> = rest
+    {block_runtime_id, rest}
+  end
+
+  # Legacy item wire format (zigzag32 id; id 0 means empty and ends the item).
+  defp skip_item_instance_legacy(data) do
+    case decode_varint_signed_raw(data) do
+      {0, rest} ->
+        {0, rest}
+
+      {_network_id, rest} ->
+        <<_count::16-little, rest::binary>> = rest
+        {_metadata, rest} = Codec.decode_varuint(rest)
+        <<has_stack_id::8, rest::binary>> = rest
+
+        rest =
+          if has_stack_id == 0 do
+            rest
+          else
+            {_stack_id, r} = decode_varint_signed_raw(rest)
+            r
+          end
+
+        {block_runtime_id, rest} = decode_varint_signed_raw(rest)
+        {extra_len, rest} = Codec.decode_varuint(rest)
+        <<_extra::binary-size(extra_len), rest::binary>> = rest
+        # Zigzag-decoded; reinterpret as the unsigned network hash form.
+        <<unsigned::32-unsigned>> = <<block_runtime_id::32-signed>>
+        {unsigned, rest}
+    end
+  end
+
+  defp skip_bytes(data, n) do
+    <<_skip::binary-size(n), rest::binary>> = data
+    rest
+  end
 
   defp decode_varint_signed_raw(data) do
     {zigzag, rest} = Codec.decode_varuint(data)

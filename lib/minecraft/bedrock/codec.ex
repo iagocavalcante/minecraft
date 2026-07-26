@@ -97,19 +97,6 @@ defmodule Minecraft.Bedrock.Codec do
     decode_varuint(rest, shift + 7, acc ||| val <<< shift)
   end
 
-  # --- Game packet header ---
-
-  @spec encode_packet_header(non_neg_integer) :: binary
-  def encode_packet_header(packet_id) do
-    encode_varuint(packet_id <<< 2)
-  end
-
-  @spec decode_packet_header(binary) :: {non_neg_integer, binary}
-  def decode_packet_header(data) do
-    {header, rest} = decode_varuint(data)
-    {header >>> 2, rest}
-  end
-
   # --- Decompression ---
 
   defp zlib_inflate(data) do

@@ -35,7 +35,6 @@ defmodule Minecraft.Bedrock.Chunk do
   @world_range_start -64
   @air_sub_chunks_below 4
   @biome_sections 24
-  @plains_biome 1
 
   # Java 1.12 global block IDs (`id <<< 4 ||| meta`, see src/chunk.h) mapped to
   # Bedrock block states. Names and state sets validated against the vanilla
@@ -63,6 +62,32 @@ defmodule Minecraft.Bedrock.Chunk do
   @air_hash Map.fetch!(@type_hashes, 0)
   @unknown_hash BlockHash.signed_hash("minecraft:unknown", %{})
 
+  @unsigned_hashes Map.new(@java_blocks, fn {java_type, {name, states}} ->
+                     {java_type, BlockHash.hash(name, states)}
+                   end)
+  @java_types_by_hash Map.new(@unsigned_hashes, fn {java_type, hash} -> {hash, java_type} end)
+
+  @doc """
+  The unsigned network block hash for a mapped Java block type — the runtime
+  ID form used by UpdateBlock. Unmapped types resolve to `minecraft:unknown`.
+  """
+  @spec network_hash(0..0xFFFF) :: 0..0xFFFFFFFF
+  def network_hash(java_type) do
+    Map.get(@unsigned_hashes, java_type, 0xFFFFFFFE)
+  end
+
+  @doc """
+  Resolves an unsigned network block hash back to a Java block type, for
+  blocks the server knows how to store. Inverse of `network_hash/1`.
+  """
+  @spec java_type_for_network_hash(0..0xFFFFFFFF) :: {:ok, 0..0xFFFF} | :error
+  def java_type_for_network_hash(hash) do
+    case @java_types_by_hash do
+      %{^hash => java_type} -> {:ok, java_type}
+      _ -> :error
+    end
+  end
+
   # Allowed bits-per-index sizes for paletted storages.
   @palette_sizes [1, 2, 3, 4, 5, 6, 8, 16]
 
@@ -88,7 +113,7 @@ defmodule Minecraft.Bedrock.Chunk do
         ])
       end
 
-    biomes = List.duplicate(single_entry_storage(@plains_biome), @biome_sections)
+    biomes = encode_biome_storages(Minecraft.Chunk.get_biome_data(chunk))
 
     payload = IO.iodata_to_binary([air_below, java_sections, biomes, <<0>>])
     {@air_sub_chunks_below + num_sections, payload}
@@ -112,42 +137,65 @@ defmodule Minecraft.Bedrock.Chunk do
     types = for <<t::16-little <- types_binary>>, do: t
     types_tuple = List.to_tuple(types)
 
-    # Reorder from the generator's YZX layout into Bedrock's XZY layout while
-    # building the palette (first-seen order) and per-block palette indices.
-    {palette, indices} = palettize(types_tuple)
-
-    storage =
-      case palette do
-        [only_type] ->
-          single_entry_storage(block_hash(only_type))
-
-        _ ->
-          packed_storage(palette, indices)
-      end
+    # Reorder from the generator's YZX layout into Bedrock's XZY layout, then
+    # build the palette (first-seen order) and per-block palette indices.
+    values = Enum.map(bedrock_order(), &elem(types_tuple, &1))
+    storage = paletted_storage(values, &block_hash/1)
 
     sub_chunk_header(section_index, [storage])
+  end
+
+  # The generator produces one biome per column (256 bytes, indexed z*16+x,
+  # legacy numeric biome IDs — the same id space Bedrock's chunk format uses).
+  # Bedrock wants a 3D paletted storage per 16-block section; every section
+  # gets the same column-extruded storage.
+  defp encode_biome_storages(biome_data) do
+    columns = List.to_tuple(:binary.bin_to_list(biome_data))
+
+    values =
+      for x <- 0..15, z <- 0..15, _y <- 0..15 do
+        elem(columns, z * 16 + x)
+      end
+
+    # Header 0xFF (0x7F <<< 1 ||| 1) means "same as previous storage"; all our
+    # sections share one column-extruded storage, so write it once.
+    [paletted_storage(values, & &1) | List.duplicate(<<0xFF>>, @biome_sections - 1)]
+  end
+
+  # Builds a network paletted storage from 4096 values in XZY order.
+  # `to_entry` converts a raw value into the palette-entry integer (block
+  # values become network hashes; biome values are used as-is).
+  defp paletted_storage(values, to_entry) do
+    {palette, indices} = palettize(values)
+
+    case palette do
+      [only_value] ->
+        single_entry_storage(to_entry.(only_value))
+
+      _ ->
+        packed_storage(Enum.map(palette, to_entry), indices)
+    end
   end
 
   defp sub_chunk_header(y_index, storages) do
     [<<9, length(storages), y_index::8-unsigned>>, storages]
   end
 
-  defp palettize(types_tuple) do
-    {palette_map, rev_palette, rev_indices} =
-      Enum.reduce(bedrock_order(), {%{}, [], []}, fn java_index, {map, rev_pal, rev_idx} ->
-        type = elem(types_tuple, java_index)
-
+  # Deduplicates a list of values into a first-seen-order palette plus one
+  # palette index per value.
+  defp palettize(values) do
+    {_palette_map, rev_palette, rev_indices} =
+      Enum.reduce(values, {%{}, [], []}, fn value, {map, rev_pal, rev_idx} ->
         case map do
-          %{^type => palette_index} ->
+          %{^value => palette_index} ->
             {map, rev_pal, [palette_index | rev_idx]}
 
           _ ->
             palette_index = map_size(map)
-            {Map.put(map, type, palette_index), [type | rev_pal], [palette_index | rev_idx]}
+            {Map.put(map, value, palette_index), [value | rev_pal], [palette_index | rev_idx]}
         end
       end)
 
-    _ = palette_map
     {Enum.reverse(rev_palette), Enum.reverse(rev_indices)}
   end
 
@@ -156,8 +204,8 @@ defmodule Minecraft.Bedrock.Chunk do
   @bedrock_order for x <- 0..15, z <- 0..15, y <- 0..15, do: (y * 16 + z) * 16 + x
   defp bedrock_order, do: @bedrock_order
 
-  defp packed_storage(palette, indices) do
-    bits = Enum.find(@palette_sizes, 16, fn b -> 1 <<< b >= length(palette) end)
+  defp packed_storage(entries, indices) do
+    bits = Enum.find(@palette_sizes, 16, fn b -> 1 <<< b >= length(entries) end)
     blocks_per_word = div(32, bits)
 
     words =
@@ -172,13 +220,11 @@ defmodule Minecraft.Bedrock.Chunk do
         <<word::32-little>>
       end)
 
-    entries = Enum.map(palette, &encode_varint_signed(block_hash(&1)))
-
     [
       <<bits <<< 1 ||| 1>>,
       words,
-      encode_varint_signed(length(palette)),
-      entries
+      encode_varint_signed(length(entries)),
+      Enum.map(entries, &encode_varint_signed/1)
     ]
   end
 

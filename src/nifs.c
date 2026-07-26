@@ -131,6 +131,59 @@ static ERL_NIF_TERM section_block_types(ErlNifEnv *env, int argc,
   return enif_make_tuple2(env, enif_make_atom(env, "ok"), term);
 }
 
+static struct ChunkSection *create_air_section(int32_t chunk_y) {
+  struct ChunkSection *section = enif_alloc(sizeof(struct ChunkSection));
+  if (section == NULL) {
+    return NULL;
+  }
+  section->y = chunk_y;
+  for (size_t i = 0; i < 16 * 16 * 16; i++) {
+    section->blocks[i].type = MC_AIR;
+    section->blocks[i].block_light = 0;
+    section->blocks[i].sky_light = 0xF;
+  }
+  return section;
+}
+
+// set_block(chunk, x, y, z, type): mutates one block in a chunk, growing the
+// chunk with air sections if the Y lands above the generated ones.
+//
+// Concurrency: all writes are funneled through the Minecraft.World process;
+// session processes may read concurrently via section_block_types. An aligned
+// uint16 store is atomic on our target architectures, so readers can observe a
+// stale value but never a torn one.
+static ERL_NIF_TERM set_block(ErlNifEnv *env, int argc,
+                              const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  struct Chunk *chunk = NULL;
+  int x, y, z;
+  unsigned int type;
+
+  if (!enif_get_resource(env, argv[0], CHUNK_RES_TYPE, (void **)&chunk) ||
+      !enif_get_int(env, argv[1], &x) || !enif_get_int(env, argv[2], &y) ||
+      !enif_get_int(env, argv[3], &z) || !enif_get_uint(env, argv[4], &type) ||
+      x < 0 || x > 15 || y < 0 || y > 255 || z < 0 || z > 15 ||
+      type > 0xFFFF) {
+    return enif_make_atom(env, "error");
+  }
+
+  int section_index = y >> 4;
+  while (chunk->num_sections <= section_index) {
+    struct ChunkSection *section = create_air_section(chunk->num_sections);
+    if (section == NULL) {
+      return enif_make_atom(env, "error");
+    }
+    chunk->chunk_sections[chunk->num_sections] = section;
+    chunk->num_sections++;
+  }
+
+  size_t block_number = (size_t)(((y & 15) * 16 + z) * 16 + x);
+  chunk->chunk_sections[section_index]->blocks[block_number].type =
+      (uint16_t)type;
+
+  return enif_make_atom(env, "ok");
+}
+
 static ERL_NIF_TERM generate_chunk(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
   (void)argc;
@@ -246,6 +299,7 @@ static ErlNifFunc nif_funcs[] = {
     {"chunk_biome_data", 1, chunk_biome_data, 0},
     {"chunk_heightmap", 1, chunk_heightmap, 0},
     {"section_block_types", 2, section_block_types, 0},
+    {"set_block", 5, set_block, 0},
     {"generate_chunk", 2, generate_chunk, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"get_chunk_coordinates", 1, get_chunk_coordinates, 0},
     {"num_chunk_sections", 1, num_chunk_sections, 0},

@@ -29,8 +29,14 @@ defmodule Minecraft.Bedrock.Session do
     split_id: 0,
     splits: %{},
     bedrock_state: :connecting,
-    compression_enabled: false
+    compression_enabled: false,
+    position: nil,
+    rotation: nil
   ]
+
+  # Java 1.12 global block types (id <<< 4 ||| meta).
+  @java_air 0
+  @java_stone 16
 
   def start_link({client_key, server_guid, mtu, client_guid}) do
     GenServer.start_link(__MODULE__, {client_key, server_guid, mtu, client_guid})
@@ -155,33 +161,18 @@ defmodule Minecraft.Bedrock.Session do
     case Codec.decode_batch(data, state.compression_enabled) do
       {:ok, packets} ->
         Enum.reduce(packets, state, fn pkt, st ->
-          case Packet.decode(pkt) do
-            {:request_network_settings, %{protocol_version: ver}} ->
-              Logger.info("Bedrock: Client protocol version: #{ver}")
-              handle_request_network_settings(st)
+          # A malformed or not-yet-supported packet must not take down the
+          # whole session; log it and keep going.
+          try do
+            handle_game_packet(Packet.decode(pkt), st)
+          rescue
+            error ->
+              Logger.warning(
+                "Bedrock: error handling game packet " <>
+                  "#{inspect(:binary.part(pkt, 0, min(byte_size(pkt), 8)))}: " <>
+                  Exception.message(error)
+              )
 
-            {:login, %{player_name: name}} ->
-              handle_login(name, st)
-
-            {:client_cache_status, %{supported: supported}} ->
-              # Informational only — we never use the blob cache.
-              Logger.debug("Bedrock: ClientCacheStatus supported=#{supported}")
-              st
-
-            {:resource_pack_client_response, %{status: :have_all_packs}} ->
-              handle_resource_pack_response_have_all(st)
-
-            {:resource_pack_client_response, %{status: :completed}} ->
-              handle_resource_pack_completed(st)
-
-            {:request_chunk_radius, %{radius: radius}} ->
-              handle_request_chunk_radius(radius, st)
-
-            {:set_local_player_as_initialised, _} ->
-              handle_player_initialised(st)
-
-            other ->
-              Logger.debug("Bedrock: unhandled game packet: #{inspect(other)}")
               st
           end
         end)
@@ -190,6 +181,61 @@ defmodule Minecraft.Bedrock.Session do
         Logger.warning("Bedrock: failed to decode batch: #{inspect(reason)}")
         state
     end
+  end
+
+  defp handle_game_packet({:request_network_settings, %{protocol_version: ver}}, state) do
+    Logger.info("Bedrock: Client protocol version: #{ver}")
+    handle_request_network_settings(state)
+  end
+
+  defp handle_game_packet({:login, %{player_name: name}}, state) do
+    handle_login(name, state)
+  end
+
+  defp handle_game_packet({:client_cache_status, %{supported: supported}}, state) do
+    # Informational only — we never use the blob cache.
+    Logger.debug("Bedrock: ClientCacheStatus supported=#{supported}")
+    state
+  end
+
+  defp handle_game_packet({:resource_pack_client_response, %{status: :have_all_packs}}, state) do
+    handle_resource_pack_response_have_all(state)
+  end
+
+  defp handle_game_packet({:resource_pack_client_response, %{status: :completed}}, state) do
+    handle_resource_pack_completed(state)
+  end
+
+  defp handle_game_packet({:request_chunk_radius, %{radius: radius}}, state) do
+    handle_request_chunk_radius(radius, state)
+  end
+
+  defp handle_game_packet({:set_local_player_as_initialised, _}, state) do
+    handle_player_initialised(state)
+  end
+
+  defp handle_game_packet({:player_auth_input, %{position: position} = input}, state) do
+    # ~20/s — just track the latest position/rotation, no reply.
+    %{state | position: position, rotation: {input.pitch, input.yaw, input.head_yaw}}
+  end
+
+  defp handle_game_packet(
+         {:inventory_transaction, %{type: :use_item, action: :break_block} = tx},
+         state
+       ) do
+    handle_break_block(tx.block_position, state)
+  end
+
+  defp handle_game_packet(
+         {:inventory_transaction, %{type: :use_item, action: :click_block} = tx},
+         state
+       ) do
+    handle_place_block(tx.block_position, tx.face, tx.held_block_runtime_id, state)
+  end
+
+  defp handle_game_packet(other, state) do
+    Logger.debug("Bedrock: unhandled game packet: #{inspect(other)}")
+    state
   end
 
   # Catch-all: try to decode as a raw game packet or log for debugging
@@ -299,6 +345,53 @@ defmodule Minecraft.Bedrock.Session do
     Logger.info("Bedrock: Player '#{state.player_name}' fully spawned!")
     %{state | bedrock_state: :playing}
   end
+
+  defp handle_break_block({x, y, z}, state) do
+    case Minecraft.World.set_block(x, y, z, @java_air) do
+      :ok ->
+        Logger.info("Bedrock: '#{state.player_name}' broke block at #{x},#{y},#{z}")
+        air = Minecraft.Bedrock.Chunk.network_hash(@java_air)
+        send_game_packet(state, Packet.encode_update_block(x, y, z, air))
+
+      :error ->
+        Logger.warning("Bedrock: rejected break at #{x},#{y},#{z} (out of world range)")
+        state
+    end
+  end
+
+  defp handle_place_block({x, y, z}, face, held_block_runtime_id, state) do
+    {dx, dy, dz} = face_offset(face)
+    {tx, ty, tz} = {x + dx, y + dy, z + dz}
+
+    # The held item's block runtime ID (a network block hash) determines what
+    # gets placed. Until the creative item pipeline exists (ItemRegistry +
+    # CreativeContent are empty), an empty hand or unknown block places stone.
+    java_type =
+      case Minecraft.Bedrock.Chunk.java_type_for_network_hash(held_block_runtime_id) do
+        {:ok, type} when type != @java_air -> type
+        _ -> @java_stone
+      end
+
+    case Minecraft.World.set_block(tx, ty, tz, java_type) do
+      :ok ->
+        Logger.info("Bedrock: '#{state.player_name}' placed #{java_type} at #{tx},#{ty},#{tz}")
+        hash = Minecraft.Bedrock.Chunk.network_hash(java_type)
+        send_game_packet(state, Packet.encode_update_block(tx, ty, tz, hash))
+
+      :error ->
+        Logger.warning("Bedrock: rejected place at #{tx},#{ty},#{tz} (out of world range)")
+        state
+    end
+  end
+
+  # Block face → adjacent-position offset (down, up, north, south, west, east).
+  defp face_offset(0), do: {0, -1, 0}
+  defp face_offset(1), do: {0, 1, 0}
+  defp face_offset(2), do: {0, 0, -1}
+  defp face_offset(3), do: {0, 0, 1}
+  defp face_offset(4), do: {-1, 0, 0}
+  defp face_offset(5), do: {1, 0, 0}
+  defp face_offset(_other), do: {0, 1, 0}
 
   # =====================
   # Send Helpers
