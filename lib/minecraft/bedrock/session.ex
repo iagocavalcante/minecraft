@@ -246,9 +246,9 @@ defmodule Minecraft.Bedrock.Session do
   defp handle_resource_pack_completed(state) do
     Logger.info("Bedrock: Resource packs completed — sending StartGame")
 
-    # The flat chunk's walkable surface is at this Y; spawn the player just
-    # above it so they land on the grass instead of inside it.
-    surface = Minecraft.Bedrock.Chunk.flat_chunk_surface_y()
+    # Spawn just above the generated terrain surface at world origin so the
+    # player lands on the ground instead of inside it (or in the void).
+    surface = Minecraft.Bedrock.Chunk.surface_y(Minecraft.World.get_chunk(0, 0), 0, 0)
 
     start_game =
       Packet.encode_start_game(
@@ -273,13 +273,14 @@ defmodule Minecraft.Bedrock.Session do
 
     state = send_game_packet(state, Packet.encode_chunk_radius_updated(actual_radius))
 
-    chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
-    sub_chunks = Minecraft.Bedrock.Chunk.flat_chunk_sub_chunks()
-    surface = Minecraft.Bedrock.Chunk.flat_chunk_surface_y()
+    spawn_chunk = Minecraft.World.get_chunk(0, 0)
+    surface = Minecraft.Bedrock.Chunk.surface_y(spawn_chunk, 0, 0)
 
     state =
       Enum.reduce(-actual_radius..actual_radius, state, fn x, st ->
         Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
+          chunk = Minecraft.World.get_chunk(x, z)
+          {sub_chunks, chunk_data} = Minecraft.Bedrock.Chunk.encode(chunk)
           send_game_packet(st2, Packet.encode_level_chunk(x, z, sub_chunks, chunk_data))
         end)
       end)

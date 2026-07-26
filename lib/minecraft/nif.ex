@@ -67,4 +67,23 @@ defmodule Minecraft.NIF do
     # Don't raise here, or Dialyzer complains
     :erlang.nif_error("NIF chunk_biome_data/1 not implemented")
   end
+
+  @doc """
+  Gets the heightmap of a chunk as a 256-byte binary indexed by `z * 16 + x`.
+  """
+  @spec chunk_heightmap(any) :: {:ok, binary} | :error
+  def chunk_heightmap(_chunk) do
+    # Don't raise here, or Dialyzer complains
+    :erlang.nif_error("NIF chunk_heightmap/1 not implemented")
+  end
+
+  @doc """
+  Gets the raw block types of one chunk section: a binary of 4096 uint16
+  (little endian) in YZX order, i.e. entry `(y * 16 + z) * 16 + x`.
+  """
+  @spec section_block_types(any, non_neg_integer) :: {:ok, binary} | :error
+  def section_block_types(_chunk, _index) do
+    # Don't raise here, or Dialyzer complains
+    :erlang.nif_error("NIF section_block_types/2 not implemented")
+  end
 end

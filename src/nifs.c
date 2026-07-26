@@ -91,6 +91,46 @@ static ERL_NIF_TERM chunk_biome_data(ErlNifEnv *env, int argc,
   return enif_make_tuple2(env, enif_make_atom(env, "ok"), term);
 }
 
+static ERL_NIF_TERM chunk_heightmap(ErlNifEnv *env, int argc,
+                                    const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  struct Chunk *chunk = NULL;
+  if (!enif_get_resource(env, argv[0], CHUNK_RES_TYPE, (void **)&chunk)) {
+    return enif_make_atom(env, "error");
+  }
+
+  ERL_NIF_TERM term;
+  uint8_t *heightmap = enif_make_new_binary(env, 256, &term);
+  memcpy(heightmap, chunk->heightmap, 256);
+
+  return enif_make_tuple2(env, enif_make_atom(env, "ok"), term);
+}
+
+// Raw block types of one chunk section as a binary of 4096 uint16 (little
+// endian), in the generator's YZX order: index = (y * 16 + z) * 16 + x.
+static ERL_NIF_TERM section_block_types(ErlNifEnv *env, int argc,
+                                        const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  struct Chunk *chunk = NULL;
+  int index;
+  if (!enif_get_resource(env, argv[0], CHUNK_RES_TYPE, (void **)&chunk) ||
+      !enif_get_int(env, argv[1], &index) || index < 0 ||
+      index >= chunk->num_sections) {
+    return enif_make_atom(env, "error");
+  }
+
+  struct ChunkSection *section = chunk->chunk_sections[index];
+  ERL_NIF_TERM term;
+  uint8_t *out = enif_make_new_binary(env, 4096 * 2, &term);
+  for (size_t i = 0; i < 4096; i++) {
+    uint16_t type = section->blocks[i].type;
+    out[i * 2] = (uint8_t)(type & 0xFF);
+    out[i * 2 + 1] = (uint8_t)(type >> 8);
+  }
+
+  return enif_make_tuple2(env, enif_make_atom(env, "ok"), term);
+}
+
 static ERL_NIF_TERM generate_chunk(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
   (void)argc;
@@ -204,6 +244,8 @@ int nif_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info) {
 static ErlNifFunc nif_funcs[] = {
     // {erl_function_name, erl_function_arity, c_function, flags}
     {"chunk_biome_data", 1, chunk_biome_data, 0},
+    {"chunk_heightmap", 1, chunk_heightmap, 0},
+    {"section_block_types", 2, section_block_types, 0},
     {"generate_chunk", 2, generate_chunk, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"get_chunk_coordinates", 1, get_chunk_coordinates, 0},
     {"num_chunk_sections", 1, num_chunk_sections, 0},
