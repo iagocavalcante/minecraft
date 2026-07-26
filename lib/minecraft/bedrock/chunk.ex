@@ -67,6 +67,23 @@ defmodule Minecraft.Bedrock.Chunk do
                    end)
   @java_types_by_hash Map.new(@unsigned_hashes, fn {java_type, hash} -> {hash, java_type} end)
 
+  # Blocks with no obtainable block item (air; water only exists as a bucket).
+  @non_item_blocks [0, 144]
+
+  @doc """
+  Blocks offered in the creative inventory: `{bedrock_name, signed_hash}`
+  pairs, sorted by name. Item names equal block names for all of these.
+  """
+  @spec creative_blocks() :: [{String.t(), integer}]
+  def creative_blocks do
+    @java_blocks
+    |> Enum.reject(fn {java_type, _} -> java_type in @non_item_blocks end)
+    |> Enum.map(fn {java_type, {name, _states}} ->
+      {name, Map.fetch!(@type_hashes, java_type)}
+    end)
+    |> Enum.sort()
+  end
+
   @doc """
   The unsigned network block hash for a mapped Java block type — the runtime
   ID form used by UpdateBlock. Unmapped types resolve to `minecraft:unknown`.

@@ -86,9 +86,9 @@ Both scripts exit 0 on success, making them usable in CI.
 
 ### Phase 3 — Items & creative inventory
 
-- [ ] ItemRegistry with the real vanilla item list (mobile clients need it for inventory UI)
-- [ ] CreativeContent so the creative inventory is browsable
-- [ ] Map the held item to the placed block (replaces the stone-only fallback)
+- [x] ItemRegistry with the real vanilla item list (1934 items, from pmmp/BedrockData for protocol 1001)
+- [x] CreativeContent: a Construction group with every placeable block
+- [x] Map the held item to the placed block via its network block hash (replaces the stone-only fallback when the client reports the held block)
 - [ ] Pin down the held-item wire format from real-device captures (two variants exist in the wild; the decoder currently accepts both)
 
 ### Phase 4 — World persistence

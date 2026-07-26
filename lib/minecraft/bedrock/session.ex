@@ -338,10 +338,44 @@ defmodule Minecraft.Bedrock.Session do
       )
 
     state = send_game_packet(state, start_game)
-    # gophertunnel sends ItemRegistry immediately after StartGame.
-    state = send_game_packet(state, Packet.encode_item_registry())
+    # gophertunnel sends ItemRegistry immediately after StartGame; the full
+    # vanilla table is required for the client's item/inventory UI.
+    state = send_game_packet(state, Packet.encode_item_registry(Minecraft.Bedrock.Items.all()))
+    state = send_game_packet(state, encode_creative_inventory())
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
+  end
+
+  # One "Building Blocks" group holding every block the server can place.
+  # Blocks whose item is missing from the item table are skipped with a
+  # warning rather than crashing the join.
+  defp encode_creative_inventory do
+    stacks =
+      for {name, block_hash} <- Minecraft.Bedrock.Chunk.creative_blocks(),
+          item_id = resolve_item_id(name),
+          item_id != nil do
+        {{item_id, block_hash}, 0}
+      end
+
+    icon =
+      case stacks do
+        [{stack, _} | _] -> stack
+        [] -> {0, 0}
+      end
+
+    # Category 1 = Construction.
+    Packet.encode_creative_content([{1, "", icon}], stacks)
+  end
+
+  defp resolve_item_id(name) do
+    case Minecraft.Bedrock.Items.runtime_id(name) do
+      {:ok, id} ->
+        id
+
+      :error ->
+        Logger.warning("Bedrock: no item table entry for #{name}, skipping in creative")
+        nil
+    end
   end
 
   defp handle_request_chunk_radius(radius, state) do

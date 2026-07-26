@@ -507,9 +507,90 @@ defmodule Minecraft.Bedrock.Packet do
   # PRIVATE HELPERS
   # =====================
 
-  @doc "ItemRegistry (ID 148) — empty item list, sent after StartGame"
-  def encode_item_registry do
-    wrap(148, encode_varint_unsigned(0))
+  @item_registry 162
+  @creative_content 145
+
+  # Empty NBT compound, NetworkLittleEndian: TAG_Compound + empty name + TAG_End.
+  @empty_nbt <<0x0A, 0x00, 0x00>>
+
+  @doc """
+  ItemRegistry (ID 162) — the full vanilla item table, sent right after
+  StartGame. Each entry: name, runtime ID (int16 LE, signed — block items are
+  negative), component-based bool, version (zigzag varint), NBT data.
+  """
+  def encode_item_registry(items) do
+    entries =
+      Enum.map(items, fn %{name: name, runtime_id: runtime_id, version: version} ->
+        [
+          encode_string(name),
+          <<runtime_id::16-little-signed>>,
+          # ComponentBased (vanilla items are not)
+          <<0::8>>,
+          encode_varint_signed(version),
+          @empty_nbt
+        ]
+      end)
+
+    body = IO.iodata_to_binary([encode_varint_unsigned(length(items)), entries])
+    wrap(@item_registry, body)
+  end
+
+  @doc """
+  CreativeContent (ID 145) — the creative inventory. `groups` are
+  `{category, name, icon_stack}` tuples; `items` are `{item_stack, group_index}`
+  tuples, numbered 1..n as their creative network IDs. Stacks are
+  `{item_runtime_id, block_runtime_id}` (signed network block hash, 0 for
+  non-block items).
+  """
+  def encode_creative_content(groups, items) do
+    group_entries =
+      Enum.map(groups, fn {category, name, icon_stack} ->
+        [<<category::32-little-signed>>, encode_string(name), encode_item_stack(icon_stack)]
+      end)
+
+    item_entries =
+      items
+      |> Enum.with_index(1)
+      |> Enum.map(fn {{stack, group_index}, creative_network_id} ->
+        [
+          encode_varint_unsigned(creative_network_id),
+          encode_item_stack(stack),
+          encode_varint_unsigned(group_index)
+        ]
+      end)
+
+    body =
+      IO.iodata_to_binary([
+        encode_varint_unsigned(length(groups)),
+        group_entries,
+        encode_varint_unsigned(length(items)),
+        item_entries
+      ])
+
+    wrap(@creative_content, body)
+  end
+
+  # ItemStack (gophertunnel Writer.Item): zigzag network ID (0 ends the stack),
+  # count, metadata, zigzag block runtime ID, then the extra-data blob as a
+  # varuint byte slice: int16 NBT length (0 = none) + two empty uint32-length
+  # string lists (CanBePlacedOn / CanBreak).
+  defp encode_item_stack({item_runtime_id, block_runtime_id}) do
+    if item_runtime_id == 0 do
+      encode_varint_signed(0)
+    else
+      extra = <<0::16-little, 0::32-little, 0::32-little>>
+
+      IO.iodata_to_binary([
+        encode_varint_signed(item_runtime_id),
+        # Count (uint16 LE)
+        <<1::16-little>>,
+        # MetadataValue (varuint)
+        encode_varint_unsigned(0),
+        encode_varint_signed(block_runtime_id),
+        encode_varint_unsigned(byte_size(extra)),
+        extra
+      ])
+    end
   end
 
   # Block palette for StartGame — defines runtime ID to block name mapping
