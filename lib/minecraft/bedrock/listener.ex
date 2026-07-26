@@ -67,7 +67,9 @@ defmodule Minecraft.Bedrock.Listener do
         :gen_udp.send(state.socket, address, port, pong)
         state
 
-      {:open_connection_request_1, %{protocol_version: 11, mtu_size: mtu}} ->
+      # 11 = modern Minecraft clients; 10 = older RakNet stacks (still wire
+      # compatible for everything this server uses).
+      {:open_connection_request_1, %{protocol_version: v, mtu_size: mtu}} when v in [10, 11] ->
         reply = RakNet.encode_open_connection_reply_1(state.server_guid, mtu)
         :gen_udp.send(state.socket, address, port, reply)
         state
@@ -114,6 +116,6 @@ defmodule Minecraft.Bedrock.Listener do
   end
 
   defp build_motd(server_guid) do
-    "MCPE;Elixir Minecraft;944;1.26.10;0;20;#{server_guid};Bedrock Level;Survival;1;19132;19133"
+    "MCPE;Elixir Minecraft;1001;1.26.30;0;20;#{server_guid};Bedrock Level;Survival;1;19132;19133"
   end
 end

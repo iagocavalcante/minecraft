@@ -139,7 +139,7 @@ defmodule Minecraft.Bedrock.Packet do
   end
 
   @doc """
-  StartGame — matches gophertunnel Marshal order for protocol 924.
+  StartGame — matches gophertunnel Marshal order for protocol 1001 (1.26.30).
   """
   def encode_start_game(opts \\ []) do
     entity_id = Keyword.get(opts, :entity_id, 1)
@@ -268,6 +268,10 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::8>>,
         # DisablePlayerInteractions
         <<0::8>>,
+        # ServerEditorConnectionPolicy (present at protocol 1001)
+        encode_varint_signed(0),
+        # AllowAnonymousBlockDropsInEditorWorlds (present at protocol 1001)
+        <<0::8>>,
         # LevelID
         encode_string(""),
         # WorldName
@@ -292,7 +296,7 @@ defmodule Minecraft.Bedrock.Packet do
         # ServerAuthoritativeInventory
         <<0::8>>,
         # GameVersion
-        encode_string("1.26.0"),
+        encode_string("1.26.30"),
         # PropertyData — empty NBT compound (NetworkLittleEndian)
         # TAG_Compound(0x0A) + varint name_len(0) + TAG_End(0x00)
         <<0x0A, 0x00, 0x00>>,
@@ -302,9 +306,13 @@ defmodule Minecraft.Bedrock.Packet do
         <<0::128>>,
         # ClientSideGeneration
         <<0::8>>,
-        # UseBlockNetworkIDHashes (false — sequential runtime IDs from vanilla palette)
-        <<0::8>>,
+        # UseBlockNetworkIDHashes (true — palette entries are FNV-1a hashes of
+        # the block state NBT, see Minecraft.Bedrock.BlockHash; no
+        # version-specific runtime-ID table needed)
+        <<1::8>>,
         # ServerAuthoritativeSound
+        <<0::8>>,
+        # IsLoggingChat (present at protocol 1001)
         <<0::8>>,
         # ServerJoinInformation (OptionalMarshaler — write false/0 to skip)
         <<0::8>>,

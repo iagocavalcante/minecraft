@@ -54,6 +54,10 @@ defmodule Minecraft.Bedrock.Session do
     {:noreply, state}
   end
 
+  def handle_info(:client_disconnected, state) do
+    {:stop, :normal, state}
+  end
+
   # =====================
   # RakNet Layer
   # =====================
@@ -136,6 +140,13 @@ defmodule Minecraft.Bedrock.Session do
     send_reliable(state, pong)
   end
 
+  # RakNet DisconnectionNotification — the client is leaving; stop the session.
+  defp handle_payload(<<0x15, _::binary>>, state) do
+    Logger.info("Bedrock: client #{inspect(state.client_key)} disconnected (RakNet 0x15)")
+    send(self(), :client_disconnected)
+    state
+  end
+
   # =====================
   # Bedrock Game Layer (0xFE batch)
   # =====================
@@ -152,9 +163,10 @@ defmodule Minecraft.Bedrock.Session do
             {:login, %{player_name: name}} ->
               handle_login(name, st)
 
-            {:client_cache_status, _} ->
-              Logger.debug("Bedrock: ClientCacheStatus — sending ResourcePacksInfo")
-              send_game_packet(st, Packet.encode_resource_packs_info())
+            {:client_cache_status, %{supported: supported}} ->
+              # Informational only — we never use the blob cache.
+              Logger.debug("Bedrock: ClientCacheStatus supported=#{supported}")
+              st
 
             {:resource_pack_client_response, %{status: :have_all_packs}} ->
               handle_resource_pack_response_have_all(st)
@@ -217,10 +229,12 @@ defmodule Minecraft.Bedrock.Session do
     Logger.info("Bedrock: Login from '#{player_name}'")
 
     state = %{state | player_name: player_name}
-    # Send PlayStatus first, then ResourcePacksInfo
-    # They must be separate batches for the client to process correctly
+    # Vanilla order: PlayStatus(login_success) then ResourcePacksInfo, without
+    # waiting for anything from the client (ClientCacheStatus arrival varies by
+    # client and must not gate the flow). Separate batches on purpose.
     state = send_game_packet(state, Packet.encode_play_status(:login_success))
-    %{state | bedrock_state: :awaiting_cache_status}
+    state = send_game_packet(state, Packet.encode_resource_packs_info())
+    %{state | bedrock_state: :resource_packs}
   end
 
   defp handle_resource_pack_response_have_all(state) do
@@ -232,49 +246,48 @@ defmodule Minecraft.Bedrock.Session do
   defp handle_resource_pack_completed(state) do
     Logger.info("Bedrock: Resource packs completed — sending StartGame")
 
+    # The flat chunk's walkable surface is at this Y; spawn the player just
+    # above it so they land on the grass instead of inside it.
+    surface = Minecraft.Bedrock.Chunk.flat_chunk_surface_y()
+
     start_game =
       Packet.encode_start_game(
         entity_id: 1,
         runtime_id: 1,
         game_mode: 1,
-        position: {0.0, 64.0, 0.0},
-        spawn: {0, 64, 0},
+        position: {0.5, surface + 3.0, 0.5},
+        spawn: {0, surface + 1, 0},
         world_name: "Elixir Minecraft"
       )
 
     state = send_game_packet(state, start_game)
-    # TODO: Send ItemRegistry with full vanilla item list (empty list crashes mobile)
+    # gophertunnel sends ItemRegistry immediately after StartGame.
+    state = send_game_packet(state, Packet.encode_item_registry())
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end
 
   defp handle_request_chunk_radius(radius, state) do
     Logger.info("Bedrock: RequestChunkRadius #{radius}")
-    actual_radius = min(radius, 2)
+    actual_radius = radius |> min(8) |> max(2)
 
     state = send_game_packet(state, Packet.encode_chunk_radius_updated(actual_radius))
 
     chunk_data = Minecraft.Bedrock.Chunk.flat_chunk()
-
-    File.write!(
-      "/tmp/mc_debug.log",
-      "chunk_size=#{byte_size(chunk_data)}\nchunk_hex=#{Base.encode16(chunk_data)}\n",
-      [:write]
-    )
+    sub_chunks = Minecraft.Bedrock.Chunk.flat_chunk_sub_chunks()
+    surface = Minecraft.Bedrock.Chunk.flat_chunk_surface_y()
 
     state =
       Enum.reduce(-actual_radius..actual_radius, state, fn x, st ->
         Enum.reduce(-actual_radius..actual_radius, st, fn z, st2 ->
-          st3 = send_game_packet(st2, Packet.encode_level_chunk(x, z, 4, chunk_data))
-          Process.sleep(10)
-          st3
+          send_game_packet(st2, Packet.encode_level_chunk(x, z, sub_chunks, chunk_data))
         end)
       end)
 
     state =
       send_game_packet(
         state,
-        Packet.encode_network_chunk_publisher_update(0, 64, 0, actual_radius * 16)
+        Packet.encode_network_chunk_publisher_update(0, surface + 1, 0, actual_radius * 16)
       )
 
     # Send PlayStatus(PlayerSpawn) AFTER chunks (matches gophertunnel order)
