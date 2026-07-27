@@ -280,15 +280,23 @@ defmodule Minecraft.Bedrock.Session do
       true ->
         Logger.debug("Bedrock: opening inventory for '#{state.player_name}'")
 
-        position =
-          case state.position do
-            {px, py, pz} -> {trunc(px), trunc(py), trunc(pz)}
-            nil -> {0, 0, 0}
+        # Two reference servers answer this differently; both work against
+        # vanilla clients. Default is dragonfly's form (window 0, entity -1,
+        # player position); BEDROCK_PMPP_CONTAINER_OPEN switches to
+        # PocketMine's (fresh window ID 1, entity = player, zero position).
+        state =
+          if System.get_env("BEDROCK_PMPP_CONTAINER_OPEN") do
+            send_game_packet(state, Packet.encode_container_open(1, 0xFF, {0, 0, 0}, 1))
+          else
+            position =
+              case state.position do
+                {px, py, pz} -> {trunc(px), trunc(py), trunc(pz)}
+                nil -> {0, 0, 0}
+              end
+
+            send_game_packet(state, Packet.encode_container_open(0, 0xFF, position, -1))
           end
 
-        # Window 0 = player inventory, container type 0xFF (-1) = own inventory,
-        # entity unique ID -1 (not an entity-backed container).
-        state = send_game_packet(state, Packet.encode_container_open(0, 0xFF, position, -1))
         %{state | inventory_open: true}
     end
   end
@@ -379,7 +387,10 @@ defmodule Minecraft.Bedrock.Session do
     state = send_game_packet(state, start_game)
     # gophertunnel sends ItemRegistry immediately after StartGame; the full
     # vanilla table is required for the client's item/inventory UI.
-    state = send_game_packet(state, Packet.encode_item_registry(Minecraft.Bedrock.Items.all()))
+    registry_items =
+      if System.get_env("BEDROCK_EMPTY_REGISTRY"), do: [], else: Minecraft.Bedrock.Items.all()
+
+    state = send_game_packet(state, Packet.encode_item_registry(registry_items))
 
     # Debug kill-switch for bisecting client crashes; unset in normal operation.
     state =
