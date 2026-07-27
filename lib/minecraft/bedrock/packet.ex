@@ -531,6 +531,121 @@ defmodule Minecraft.Bedrock.Packet do
 
   @item_registry 162
   @creative_content 145
+  @player_list 0x3F
+  @update_abilities 187
+
+  @doc """
+  PlayerList (ID 63) Add — registers a player (UUID, entity ID, name, skin)
+  with the client. The client needs its own entry to render the player model,
+  e.g. the paper doll in the inventory screen.
+  """
+  def encode_player_list_add(uuid, entity_unique_id, username) do
+    body =
+      IO.iodata_to_binary([
+        # ActionType: add
+        <<0::8>>,
+        encode_varint_unsigned(1),
+        encode_uuid(uuid),
+        encode_varint_signed64(entity_unique_id),
+        encode_string(username),
+        # XUID, PlatformChatID
+        encode_string(""),
+        encode_string(""),
+        # BuildPlatform (int32 LE, -1 = unknown)
+        <<-1::32-little-signed>>,
+        encode_skin(),
+        # Teacher, Host, SubClient
+        <<0::8, 0::8, 0::8>>,
+        # PlayerColour (ARGB int32 LE) — opaque white
+        <<0xFFFFFFFF::32-little>>,
+        # Per-entry Skin.Trusted bools, after the entries slice
+        <<1::8>>
+      ])
+
+    wrap(@player_list, body)
+  end
+
+  @doc """
+  UpdateAbilities (ID 187) — the player's permission levels and base ability
+  layer. Missing ability state is another cause of UI crashes client-side.
+  """
+  def encode_update_abilities(entity_unique_id) do
+    # Base layer: declare + enable the standard interaction abilities and the
+    # speed values (the speed bits must be set for the floats to apply).
+    abilities =
+      1 |||
+        1 <<< 1 |||
+        1 <<< 2 |||
+        1 <<< 3 |||
+        1 <<< 4 |||
+        1 <<< 5 |||
+        1 <<< 10 |||
+        1 <<< 13 |||
+        1 <<< 14 |||
+        1 <<< 19
+
+    body =
+      IO.iodata_to_binary([
+        <<entity_unique_id::64-little-signed>>,
+        # PlayerPermissions: member (1), CommandPermissions: normal (0)
+        <<1::8, 0::8>>,
+        # One layer: base (uint16 LE type 1)
+        <<1::8, 1::16-little>>,
+        <<abilities::32-little, abilities::32-little>>,
+        # FlySpeed, VerticalFlySpeed, WalkSpeed
+        <<0.05::32-little-float, 1.0::32-little-float, 0.1::32-little-float>>
+      ])
+
+    wrap(@update_abilities, body)
+  end
+
+  # Bedrock wire UUID: each 8-byte half byte-reversed, halves in order
+  # (mirrors gophertunnel Writer.UUID).
+  defp encode_uuid(<<first::binary-size(8), second::binary-size(8)>>) do
+    reverse_binary(first) <> reverse_binary(second)
+  end
+
+  defp reverse_binary(binary) do
+    binary |> :binary.bin_to_list() |> Enum.reverse() |> :binary.list_to_bin()
+  end
+
+  # A minimal valid classic skin: 64x64 solid-colour image using the built-in
+  # humanoid geometry. Enough for the client to render the player model.
+  defp encode_skin do
+    resource_patch = ~s({"geometry":{"default":"geometry.humanoid.custom"}})
+    skin_data = :binary.copy(<<0x88, 0x88, 0x88, 0xFF>>, 64 * 64)
+
+    IO.iodata_to_binary([
+      # SkinID, PlayFabID
+      encode_string("Standard_Custom"),
+      encode_string(""),
+      # SkinResourcePatch (byte slice)
+      encode_string(resource_patch),
+      # SkinImageWidth/Height (uint32 LE), SkinData
+      <<64::32-little, 64::32-little>>,
+      encode_varint_unsigned(byte_size(skin_data)),
+      skin_data,
+      # Animations (uint32 LE count)
+      <<0::32-little>>,
+      # CapeImageWidth/Height, CapeData
+      <<0::32-little, 0::32-little>>,
+      encode_string(""),
+      # SkinGeometry, GeometryDataEngineVersion, AnimationData
+      encode_string(""),
+      encode_string(""),
+      encode_string(""),
+      # CapeID, FullID, ArmSize, SkinColour
+      encode_string(""),
+      encode_string("elixir-minecraft-default"),
+      encode_string("wide"),
+      encode_string("#b37b62"),
+      # PersonaPieces, PieceTintColours (uint32 LE counts)
+      <<0::32-little, 0::32-little>>,
+      # PremiumSkin, PersonaSkin, PersonaCapeOnClassicSkin, PrimaryUser,
+      # OverrideAppearance
+      <<0::8, 0::8, 0::8, 1::8, 0::8>>
+    ])
+  end
 
   # An empty ItemInstance (ItemInstanceNew wire format): int16 network ID 0,
   # uint16 count 0, varuint metadata 0, no stack-net-ID, varuint block runtime

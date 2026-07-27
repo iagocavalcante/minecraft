@@ -412,6 +412,13 @@ defmodule Minecraft.Bedrock.Session do
         |> send_game_packet(Packet.encode_inventory_content(120, 4))
       end
 
+    # The client's own player-list entry (with skin) and ability state —
+    # without them the inventory screen's player model crashes the client.
+    player_name = state.player_name || "Player"
+    uuid = :crypto.hash(:md5, "OfflinePlayer:" <> player_name)
+    state = send_game_packet(state, Packet.encode_player_list_add(uuid, 1, player_name))
+    state = send_game_packet(state, Packet.encode_update_abilities(1))
+
     # Don't send PlayStatus(PlayerSpawn) yet — wait for RequestChunkRadius + chunks first
     %{state | bedrock_state: :spawning}
   end
